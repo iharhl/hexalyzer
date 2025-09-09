@@ -1,7 +1,7 @@
 use std::io;
 use std::io::Write;
 use std::fs;
-use std::ops::Range;
+use std::ops::{Add, Range};
 use std::path::Path;
 use std::collections::{HashMap, BTreeMap};
 
@@ -15,13 +15,14 @@ const RECORD_CHKSUM_LEN: usize = BYTE_CHAR_LEN;
 
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 enum RecordType {
-    Data,
-    EndOfFile,
-    ExtendedSegmentAddress,
-    StartSegmentAddress, // TODO: deprecate? Or allow to write with it?
-    ExtendedLinearAddress,
-    StartLinearAddress,
+    Data = 0x0,
+    EndOfFile = 0x1,
+    ExtendedSegmentAddress = 0x2,
+    StartSegmentAddress = 0x3, // TODO: deprecate? Or allow to write with it?
+    ExtendedLinearAddress = 0x4,
+    StartLinearAddress = 0x5,
 }
 
 impl RecordType {
@@ -49,6 +50,21 @@ struct Record {
 }
 
 impl Record {
+    fn calculate_checksum_from_self(&self) -> u8 {
+        // Get length, address and record type byte data
+        let length = self.length as usize;
+        let addr_high_byte = (self.address >> 8) as usize;
+        let addr_low_byte = (self.address & 0xFF) as usize;
+        let rtype = self.rtype as usize;
+        // Sum it up with data vector
+        let mut sum: usize = length + addr_high_byte + addr_low_byte + rtype;
+        for &b in self.data.iter() {
+            sum = sum.add(b as usize);
+        }
+        let checksum = (!sum as u8).wrapping_add(1); // two's complement
+        checksum
+    }
+
     fn calculate_checksum(record: &str) -> u8 {
         let hex_data: Result<Vec<u8>, _> = (0..record.len())
             .step_by(BYTE_CHAR_LEN)
@@ -81,7 +97,6 @@ impl Record {
                 // Complete the record with start symbol and checksum
                 record.insert(0, ':');
                 record.push_str(&format!("{:02X}", checksum));
-
                 Ok(record)
             }
             RecordType::EndOfFile => {
@@ -138,7 +153,6 @@ impl Record {
                 // Complete the record with start symbol and checksum
                 record.insert(0, ':');
                 record.push_str(&format!("{:02X}", checksum));
-
                 Ok(record)
             }
             RecordType::ExtendedSegmentAddress => {
@@ -152,25 +166,20 @@ impl Record {
         if !line.starts_with(RECORD_START) {
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }
-
         // Get record length
         let length = u8::from_str_radix(&line[RECORD_LEN_RANGE], 16)
             .unwrap(); // TODO: handle Err
-
         // Error if record end is bigger than the record length itself
         let data_end =  RECORD_TYPE_RANGE.end + BYTE_CHAR_LEN * length as usize;
         let record_end = RECORD_CHKSUM_LEN + data_end;
         if record_end > line.len() {
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }
-
         // Get record type
         let rtype = RecordType::parse(&line[RECORD_TYPE_RANGE])?;
-
         // Get record address
         let address = u16::from_str_radix(&line[RECORD_ADDR_RANGE], 16)
             .unwrap(); // TODO: handle Err
-
         // Get record data
         let mut data: Vec<u8> = Vec::new();
         if rtype == RecordType::EndOfFile {
@@ -182,11 +191,9 @@ impl Record {
                 data.push(byte);
             }
         }
-
         // Get checksum
         let checksum = u8::from_str_radix(&line[data_end..record_end], 16)
             .unwrap(); // TODO: handle Err
-
         // Return record instance
         Ok(Self {
             length,
@@ -228,12 +235,18 @@ impl IntelHex {
     /// Parses the raw contents of the hex file and fills internal record vector.
     ///
     fn parse(&mut self, raw_contents: &str) -> Result<(), io::Error> {
-        //
-        for (idx, line) in raw_contents.lines().enumerate() {
+        // Iterate over lines of records
+        for line in raw_contents.lines() {
+            // Parse the record
             let r = match Record::parse(line) {
                 Ok(rec) => rec,
                 Err(e) => return Err(e)
             };
+            // Validate checksum of the record
+            if r.checksum != Record::calculate_checksum_from_self(&r) {
+                return Err(io::Error::from(io::ErrorKind::InvalidData));
+            }
+            //
             match r.rtype {
                 RecordType::Data => {
                     let mut addr = r.address as usize + self.offset;
@@ -297,7 +310,7 @@ impl IntelHex {
         //
         self.filepath = String::from(filepath);
         self.parse(&raw_contents)?;
-        self.size = 0;
+        self.size = size;
         Ok(())
     }
 
