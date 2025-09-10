@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+eframe = { version = "0.32.2", features = ["default"] }
 
 [lib]
 name = "intelhex_parser"
