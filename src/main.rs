@@ -1,47 +1,66 @@
 use eframe::egui::{CentralPanel, Color32, Context, FontFamily, FontId, Label, StrokeKind, TextStyle, TopBottomPanel, ViewportBuilder};
 use eframe::{egui, Frame};
 use eframe::egui::ScrollArea;
-
-fn show_top_bar(ctx: &Context) {
-    TopBottomPanel::top("menubar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Open").clicked() {
-                    println!("Open clicked");
-                    ui.close();
-                }
-                if ui.button("Export").clicked() {
-                    println!("Export clicked");
-                    ui.close();
-                }
-            });
-
-            ui.menu_button("Help", |ui| {
-                if ui.button("About").clicked() {
-                    println!("About clicked");
-                    ui.close();
-                }
-            });
-        });
-    });
-}
+use intelhex_parser::IntelHex;
 
 
 #[derive(Default)]
 struct App {
+    ih: IntelHex,
     data: Vec<u8>,
+    addr: Vec<usize>,
     selected: Option<usize>,
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         // set_styles(ctx);
-        show_top_bar(ctx);
+        self.show_top_bar(ctx);
         self.show_central_workspace(ctx);
     }
 }
 
 impl App {
+    fn show_top_bar(&mut self, ctx: &Context) {
+        TopBottomPanel::top("menubar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Open a file")
+                            .pick_file()
+                        {
+                            // TODO: fix path to be &PathBuf not &str
+                            let input_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ih_example_1.hex");
+                            self.ih = IntelHex::from_hex(input_path).unwrap();
+
+                            for (addr, byte) in &self.ih.to_bttree_map() {
+                                self.data.push(*byte);
+                                self.addr.push(*addr);
+                            }
+                        }
+                    }
+                    if ui.button("Export").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Save As")
+                            .save_file()
+                        {
+                            let output_path = concat!(env!("CARGO_MANIFEST_DIR"), "/build/ih_gen.hex");
+                            self.ih.write_hex(output_path)
+                                .expect("Failed to save file");
+                        }
+                    }
+                });
+
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About").clicked() {
+                        println!("About clicked");
+                    }
+                });
+            });
+        });
+    }
+
     fn show_central_workspace(&mut self, ctx: &Context) {
         // Left side
         egui::SidePanel::left("left_panel").show(ctx, |ui| {
@@ -56,7 +75,7 @@ impl App {
 
             let bytes_per_row = 16;
             // fake data
-            self.data = (0..=255).cycle().take(1_000).collect();
+            // self.data = (0..=255).cycle().take(1_000).collect();
 
             ScrollArea::vertical()
                 .auto_shrink([false; 2])
@@ -67,7 +86,7 @@ impl App {
                             let end = (start + bytes_per_row).min(self.data.len());
 
                             // Address (fixed width, monospaced)
-                            ui.monospace(format!("{:08X}", start));
+                            ui.monospace(format!("{:08X}", self.addr[start]));
                             ui.add_space(16.0); // spacing before hex block
 
                             // Hex bytes

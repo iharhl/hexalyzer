@@ -205,13 +205,19 @@ impl Record {
     }
 }
 
-
+#[derive(Debug, Clone)]
 pub struct IntelHex {
     pub filepath: String,
     pub size: usize, // TODO: implement
     offset: usize,
     start_addr: HashMap<RecordType, Vec<u8>>,
-    buffer: BTreeMap<usize, u8>,
+    buffer: BTreeMap<usize, u8>, // TODO: add method to dump the whole buffer
+}
+
+impl Default for IntelHex {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IntelHex {
@@ -406,6 +412,10 @@ impl IntelHex {
         write!(writer, "{}", record)?; // writes a line (no newline)
 
         Ok(())
+    }
+
+    pub fn to_bttree_map(&self) -> BTreeMap<usize, u8> {
+        self.buffer.clone()
     }
 
     /// Get byte from IntelHex at provided address.
