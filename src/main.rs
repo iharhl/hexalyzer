@@ -1,15 +1,31 @@
-use eframe::egui::{CentralPanel, Color32, Context, FontFamily, FontId, Label, StrokeKind, TextStyle, TopBottomPanel, ViewportBuilder};
+use std::collections::BTreeMap;
+use eframe::egui::{CentralPanel, Color32, Context, FontFamily, FontId, Label, Layout, StrokeKind, TextStyle, TopBottomPanel, ViewportBuilder};
 use eframe::{egui, Frame};
 use eframe::egui::ScrollArea;
 use intelhex_parser::IntelHex;
 
 
+//
+// IMPROVEMENTS:
+// 1) Render one widget per line:
+//    a) one for byte and one for ascii
+//    b) render selection using ui.interact
+// 2) Optimize how we store the hex data in the app
+//    a) store in HashMap more optimal?
+//
+// ADDITIONAL FEATURES:
+// 1) Multi-byte select
+//
+
+
 #[derive(Default)]
 struct App {
     ih: IntelHex,
-    data: Vec<u8>,
-    addr: Vec<usize>,
-    selected: Option<usize>,
+    byte_addr_map: BTreeMap<usize, u8>,
+    min_addr: usize,
+    max_addr: usize,
+    selected: Option<(usize, u8)>,
+    selection: String,
 }
 
 impl eframe::App for App {
@@ -35,9 +51,10 @@ impl App {
                             self.ih = IntelHex::from_hex(input_path).unwrap();
 
                             for (addr, byte) in &self.ih.to_bttree_map() {
-                                self.data.push(*byte);
-                                self.addr.push(*addr);
+                                self.byte_addr_map.insert(*addr, *byte);
                             }
+                            self.min_addr = self.byte_addr_map.keys().min().unwrap().clone();
+                            self.max_addr = self.byte_addr_map.keys().max().unwrap().clone();
                         }
                     }
                     if ui.button("Export").clicked() {
@@ -64,35 +81,114 @@ impl App {
     fn show_central_workspace(&mut self, ctx: &Context) {
         // Left side
         egui::SidePanel::left("left_panel").show(ctx, |ui| {
-            ui.label("Left panel");
+            egui::CollapsingHeader::new("File Information")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::Grid::new("file_info_grid")
+                        .num_columns(2) // two columns: label + value
+                        .spacing([30.0, 4.0]) // horizontal & vertical spacing
+                        .show(ui, |ui| {
+                            ui.label("File Name");
+                            ui.label(&self.ih.filepath);
+                            ui.end_row();
+
+                            ui.label("File Size");
+                            ui.label(format!("{} bytes", self.ih.size));
+                            ui.end_row();
+                        });
+                });
+
+            egui::CollapsingHeader::new("Data Inspector")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::Grid::new("data_inspector_grid")
+                        .num_columns(3) // two columns: label + value
+                        .spacing([20.0, 4.0]) // horizontal & vertical spacing
+                        .show(ui, |ui| {
+
+                            // ui.allocate_ui_with_layout(
+                            //     egui::vec2(80.0, 0.0),  // 80 px wide, height auto
+                            //     Layout::left_to_right(egui::Align::Center),
+                            //     |ui| {
+                            //         ui.label("Short");
+                            //         ui.label("Short");
+                            //         ui.label("Short");
+                            //         ui.end_row();
+                            //     },
+                            // );
+
+                            ui.heading("Type");
+                            ui.heading("Signed");
+                            ui.heading("Unsigned");
+                            ui.end_row();
+
+                            let val = self.selected.unwrap_or((0, 0)).1;
+                            ui.label("(u)int-8");
+                            ui.label((val as i8).to_string());
+                            ui.label((val as u8).to_string());
+                            ui.end_row();
+
+                            let val: u16 = (val as u16) << 8;
+                            ui.label("(u)int-16");
+                            ui.label((val as i16).to_string());
+                            ui.label((val as u16).to_string());
+                            ui.end_row();
+
+                            let val: u32 = (val as u32) << 16;
+                            ui.label("(u)int-32");
+                            ui.label((val as i32).to_string());
+                            ui.label((val as u32).to_string());
+                            ui.end_row();
+
+                            let val: u64 = (val as u64) << 32;
+                            ui.label("(u)int-64");
+                            ui.label((val as i64).to_string());
+                            ui.label((val as u64).to_string());
+                            // ui.text_edit_singleline(&m);
+                            // ui.text_edit_singleline(&mut self.s);
+                            ui.end_row();
+
+                            // let val: u32 = (val as u32) >> 32;
+                            // ui.label("float-32");
+                            // ui.label((val as f32).to_string());
+                            // ui.end_row();
+
+                            ui.label("float-64");
+                            ui.label((val as f64).to_string());
+                            ui.end_row();
+                        });
+                });
         });
         // Right side
-        egui::SidePanel::right("right_panel").show(ctx, |ui| {
-            ui.label("Right panel");
+        egui::SidePanel::right("search_panel").show(ctx, |ui| {
+            ui.label("Search panel");
         });
 
         CentralPanel::default().show(ctx, |ui| {
-
             let bytes_per_row = 16;
-            // fake data
-            // self.data = (0..=255).cycle().take(1_000).collect();
+            // Same as (self.max_addr - self.min_addr) / bytes_per_row
+            // but division rounds result up
+            let total_rows = ((self.max_addr - self.min_addr) + bytes_per_row - 1) / bytes_per_row;
+            // Get row height in pixels (depends on font size)
+            let row_height = ui.text_style_height(&TextStyle::Monospace);
 
             ScrollArea::vertical()
                 .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    for row in 0..(self.data.len() + bytes_per_row - 1) / bytes_per_row {
+                .show_rows(ui, row_height, total_rows, |ui, row_range| {
+                    //
+                    for row in row_range {
                         ui.horizontal(|ui| {
-                            let start = row * bytes_per_row;
-                            let end = (start + bytes_per_row).min(self.data.len());
+                            let start = self.min_addr + row * bytes_per_row;
+                            let end = (start + bytes_per_row); //.min(self.min_addr + self.byte_addr_map.len());
 
                             // Address (fixed width, monospaced)
-                            ui.monospace(format!("{:08X}", self.addr[start]));
+                            ui.monospace(format!("{:08X}", start));
                             ui.add_space(16.0); // spacing before hex block
 
                             // Hex bytes
                             for i in start..end {
-                                let byte = self.data[i];
-                                let is_selected = self.selected == Some(i);
+                                let byte = self.byte_addr_map.get(&i).copied().unwrap_or(0xFF);
+                                let is_selected = self.selected == Some((i, byte));
 
                                 let bg_color = if i % 2 == 0 {
                                     Color32::from_gray(210)
@@ -109,15 +205,8 @@ impl App {
                                     ).fill(Color32::from_white_alpha(0)), // fully transparent,
                                 );
 
-                                if (i + 1) % 8 == 0 {
-                                    ui.add_space(5.0);
-                                } else {
-                                    // making the space between buttons as small as possible
-                                    ui.add_space(-6.0);
-                                }
-
                                 if button.clicked() {
-                                    self.selected = Some(i);
+                                    self.selected = Some((i, byte));
                                 }
 
                                 if is_selected {
@@ -128,20 +217,7 @@ impl App {
                                         // 31, 53, 68
                                     );
                                 }
-                            }
 
-                            // Fill remaining hex slots with empty space
-                            // TODO: reused code -> put in fn
-                            for i in end..(start + bytes_per_row) {
-                                // make invisible cell
-                                ui.add_sized(
-                                    [21.0, 18.0],
-                                    egui::Button::new(egui::RichText::new("  ")
-                                                          .monospace()
-                                                          .size(12.0)
-                                    ).fill(Color32::from_white_alpha(0)), // fully transparent
-                                );
-                                // keep the spacing
                                 if (i + 1) % 8 == 0 {
                                     ui.add_space(5.0);
                                 } else {
@@ -154,14 +230,19 @@ impl App {
 
                             // ASCII representation
                             for i in start..end {
-                                let byte = self.data[i];
-                                let ch = if byte.is_ascii_graphic() {
-                                    byte as char
-                                } else {
-                                    '.'
-                                };
+                                // TODO: Retrieving values once again -> not optimal
+                                let mut ch = ' ';
+                                let mut byte = 0;
+                                if let Some(b) = self.byte_addr_map.get(&i).copied() {
+                                    byte = b;
+                                    ch = if b.is_ascii_graphic() {
+                                        b as char
+                                    } else {
+                                        '.'
+                                    }
+                                }
+                                let is_selected = self.selected == Some((i, byte));
 
-                                let is_selected = self.selected == Some(i);
                                 let label = ui.add(Label::new(
                                     egui::RichText::new(ch.to_string())
                                         .color(Color32::from_gray(160))
@@ -169,7 +250,7 @@ impl App {
                                 ));
 
                                 if label.clicked() {
-                                    self.selected = Some(i);
+                                    self.selected = Some((i, 0)); // TODO: bug
                                 }
 
                                 if is_selected {
