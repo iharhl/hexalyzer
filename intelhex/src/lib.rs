@@ -279,7 +279,7 @@ impl IntelHex {
     ///
     /// # Examples
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let ih = IntelHex::new();
     /// ```
@@ -347,7 +347,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
     /// ```
@@ -361,7 +361,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let mut ih = IntelHex::new();
     /// ih.load_hex("tests/fixtures/ih_example_1.hex").unwrap();
@@ -385,7 +385,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
     /// ih.write_hex("build/ex1/ih.hex");
@@ -487,7 +487,7 @@ impl IntelHex {
     /// # Example
     /// ```
     /// use std::collections::BTreeMap;
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
     /// let addr_byte_map: BTreeMap<usize, u8> = ih.to_btree_map();
@@ -500,7 +500,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
     /// let b: u8 = ih.get_byte(0x0).unwrap();
@@ -513,7 +513,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     ///
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
     /// let b: Vec<u8> = ih.get_buffer_slice(&[0x0, 0x1, 0x2]).unwrap();
@@ -534,7 +534,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     /// use std::io;
     ///
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
@@ -553,7 +553,7 @@ impl IntelHex {
     ///
     /// # Example
     /// ```
-    /// use intelhex_parser::IntelHex;
+    /// use intelhex::IntelHex;
     /// use std::io;
     ///
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();

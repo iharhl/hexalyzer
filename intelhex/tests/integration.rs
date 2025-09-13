@@ -1,4 +1,4 @@
-use intelhex_parser::IntelHex;
+use intelhex::IntelHex;
 use std::fs;
 
 #[test]

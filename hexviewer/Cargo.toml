@@ -1,0 +1,9 @@
+[package]
+name = "hexviewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.32.2", features = ["default"] }
+rfd = "0.15.4"
+intelhex = { path = "../intelhex" }

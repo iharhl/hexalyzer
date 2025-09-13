@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use eframe::egui::{CentralPanel, Color32, Context, FontFamily, FontId, Label, Layout, StrokeKind, TextStyle, TopBottomPanel, ViewportBuilder};
 use eframe::{egui, Frame};
 use eframe::egui::ScrollArea;
-use intelhex_parser::IntelHex;
+use intelhex::IntelHex;
 
 
 //
@@ -201,7 +201,7 @@ impl App {
                                     egui::Button::new(egui::RichText::new(format!("{:02X}", byte))
                                                           .monospace()
                                                           .size(12.0)
-                                        .color(bg_color),
+                                                          .color(bg_color),
                                     ).fill(Color32::from_white_alpha(0)), // fully transparent,
                                 );
 

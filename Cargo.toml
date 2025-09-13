@@ -1,12 +1,13 @@
-[package]
+[workspace]
+members = [
+    "intelhex",
+    "hexviewer",
+]
+resolver = "3"
+
+[workspace.package]
 name = "hexalyzer"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
-eframe = { version = "0.32.2", features = ["default"] }
-rfd = "0.15.4"
-
-[lib]
-name = "intelhex_parser"
-path = "src/lib/ih.rs"
+description = "Intel HEX parser & hex viewer GUI"
+license = "MIT"
