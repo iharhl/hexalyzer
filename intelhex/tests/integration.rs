@@ -1,5 +1,6 @@
 use intelhex::IntelHex;
 use std::fs;
+use std::io;
 
 #[test]
 fn test_from_hex() {
@@ -37,3 +38,21 @@ fn test_load_hex() {
     // Assert contents (loaded as Vec) is the same
     assert_eq!(f1, f2);
 }
+
+#[test]
+fn test_hex_parsing_returns_error() {
+    // Define in/out paths
+    let input_path = "tests/fixtures/ih_bad_checksum.hex";
+    let output_path = "build/t3/ih.hex";
+
+    // Parse hex file
+    let ih = IntelHex::from_hex(input_path);
+
+    // Assert that the Result is Err
+    if let Err(_) = ih {
+        assert!(true);
+    } else {
+        assert!(false, "Should have failed with error..."); // TODO: check for error type
+    }
+}
+

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use eframe::egui::{CentralPanel, Color32, Context, FontFamily, FontId, Label, Layout, StrokeKind, TextStyle, TopBottomPanel, ViewportBuilder};
+use eframe::egui::{CentralPanel, Color32, Context, Label, TextStyle, TopBottomPanel, ViewportBuilder};
 use eframe::{egui, Frame};
 use eframe::egui::ScrollArea;
 use intelhex::IntelHex;
@@ -26,17 +26,55 @@ struct App {
     max_addr: usize,
     selected: Option<(usize, u8)>,
     selection: String,
+    error: Option<String>,
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         // set_styles(ctx);
         self.show_top_bar(ctx);
+        self.show_popup_if_error(ctx);
         self.show_central_workspace(ctx);
     }
 }
 
 impl App {
+    fn show_popup_if_error(&mut self, ctx: &Context) {
+        if let Some(msg) = self.error.clone() {
+            let screen_rect = ctx.screen_rect();
+
+            // Block interaction with the app
+            egui::Area::new(egui::Id::from("modal_blocker"))
+                .order(egui::Order::Background)
+                .fixed_pos(screen_rect.left_top())
+                .show(ctx, |ui| {
+                    ui.allocate_rect(screen_rect, egui::Sense::click());
+                });
+
+            // Darken the background
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("modal_bg"),
+            ));
+            painter.rect_filled(screen_rect, 0.0, Color32::from_black_alpha(150));
+
+            // Display pop-up
+            egui::Window::new("Error")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([300.0, 150.0]) // TODO: fix
+                .title_bar(false)
+                .show(ctx, |ui| {
+                    ui.label(msg);
+                    ui.add_space(10.0);
+                    if ui.button("OK").clicked() {
+                        self.error = None; // close
+                    }
+                });
+        }
+    }
+
     fn show_top_bar(&mut self, ctx: &Context) {
         TopBottomPanel::top("menubar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -46,15 +84,20 @@ impl App {
                             .set_title("Open a file")
                             .pick_file()
                         {
-                            // TODO: fix path to be &PathBuf not &str
-                            let input_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ih_example_1.hex");
-                            self.ih = IntelHex::from_hex(input_path).unwrap();
+                            let ih = IntelHex::from_hex(path);
 
-                            for (addr, byte) in &self.ih.to_btree_map() {
-                                self.byte_addr_map.insert(*addr, *byte);
+                            if let Err(msg) = ih {
+                                self.error = Some(msg.to_string());
+                            } else {
+                                self.ih = ih.unwrap();
+
+                                for (addr, byte) in &self.ih.to_btree_map() {
+                                    self.byte_addr_map.insert(*addr, *byte);
+                                }
+
+                                self.min_addr = self.byte_addr_map.keys().min().unwrap().clone();
+                                self.max_addr = self.byte_addr_map.keys().max().unwrap().clone();
                             }
-                            self.min_addr = self.byte_addr_map.keys().min().unwrap().clone();
-                            self.max_addr = self.byte_addr_map.keys().max().unwrap().clone();
                         }
                     }
                     if ui.button("Export").clicked() {
@@ -269,14 +312,18 @@ impl App {
 }
 
 
-fn main() -> Result<(), eframe::Error> {
+fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_resizable(true)
-            .with_inner_size([640.0, 480.0]),
+            .with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
-    eframe::run_native("Hexalyzer", options, Box::new(|_cc| Ok(Box::<App>::default())))
+    eframe::run_native(
+        "Hexalyzer",
+        options,
+        Box::new(|_cc| Ok(Box::new(App::default())))
+    )
 }
 
 
