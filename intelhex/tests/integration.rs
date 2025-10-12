@@ -1,6 +1,6 @@
 use intelhex::{IntelHex, IntelHexError};
 use std::fs;
-use std::io;
+
 
 #[test]
 fn test_from_hex() {
