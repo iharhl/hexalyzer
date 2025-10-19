@@ -11,12 +11,17 @@ use crate::error::IntelHexError;
 
 
 #[derive(Debug, Clone)]
-struct StartAddress {
-    rtype: Option<RecordType>, // type of the start address
-    bytes: Option<[u8; 4]>,  // data bytes (aka the address itself stored as bytes)
+pub struct StartAddress {
+    /// Type of the start address
+    rtype: Option<RecordType>,
+    /// Data bytes (the address itself stored as byte array)
+    bytes: Option<[u8; 4]>,
 }
 
 impl StartAddress {
+    pub fn new(rtype: RecordType, bytes: [u8; 4]) -> Self {
+        Self { rtype: Some(rtype), bytes: Some(bytes) }
+    }
     pub fn is_empty(&self) -> bool {
         self.rtype.is_none() && self.bytes.is_none()
     }
@@ -27,8 +32,8 @@ impl StartAddress {
 pub struct IntelHex {
     pub filepath: PathBuf,
     pub size: usize,
+    pub start_addr: StartAddress,
     offset: usize,
-    start_addr: StartAddress,
     buffer: BTreeMap<usize, u8>,
 }
 
@@ -337,5 +342,16 @@ impl IntelHex {
             }
         }
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_foo() {
+        assert!(true);
     }
 }

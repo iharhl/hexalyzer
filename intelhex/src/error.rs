@@ -6,7 +6,7 @@ use std::fmt;
 use crate::record::RecordType;
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum IntelHexError {
     /// Record does not begin with a ':'
     MissingStartCode,
@@ -25,8 +25,8 @@ pub enum IntelHexError {
     RecordNotEvenLength,
     /// Record checksum mismatch
     RecordChecksumMismatch(u8, u8),
-    /// Invalid checksum length
-    RecordInvalidChecksumLength,
+    /// Invalid payload length
+    RecordInvalidPayloadLength,
     /// Encountered address that already contains data
     RecordAddressOverlap(usize),
     /// Provided record type does not exist
@@ -57,8 +57,8 @@ impl fmt::Display for IntelHexError {
             IntelHexError::RecordChecksumMismatch(expected, actual) => {
                 write!(f, "Invalid record checksum, expected: {expected}, actual: {actual}")
             },
-            IntelHexError::RecordInvalidChecksumLength => {
-                write!(f, "Record checksum length is invalid or additional byte(s) present between data end and checksum")
+            IntelHexError::RecordInvalidPayloadLength => {
+                write!(f, "Payload (data bytes) size differs from record's lengths")
             },
             IntelHexError::RecordNotEvenLength => {
                 write!(f, "Record with uneven length")
