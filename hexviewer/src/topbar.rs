@@ -1,11 +1,11 @@
-use eframe::egui::{Context, TopBottomPanel};
+use eframe::egui;
 use intelhex::IntelHex;
 use super::HexViewer;
 
 
 impl HexViewer {
-    pub(crate) fn show_top_bar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("menubar").show(ctx, |ui| {
+    pub(crate) fn show_top_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
             ui.horizontal(|ui| {
 
                 // FILE MENU
@@ -48,7 +48,6 @@ impl HexViewer {
                 });
 
                 // TODO: HELP BUTTON
-
                 ui.menu_button("Help", |ui| {
                     if ui.button("About").clicked() {
                         println!("About clicked");

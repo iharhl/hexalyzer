@@ -1,10 +1,9 @@
 use eframe::egui;
-use eframe::egui::{Color32, Context};
 use super::HexViewer;
 
 
 impl HexViewer {
-    pub(crate) fn show_popup_if_error(&mut self, ctx: &Context) {
+    pub(crate) fn show_popup_if_error(&mut self, ctx: &egui::Context) {
         if let Some(_) = self.error {
             let screen_rect = ctx.screen_rect();
 
@@ -21,7 +20,7 @@ impl HexViewer {
                 egui::Order::Background,
                 egui::Id::new("modal_bg"),
             ));
-            painter.rect_filled(screen_rect, 0.0, Color32::from_black_alpha(150));
+            painter.rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(150));
 
             // Display pop-up
             egui::Window::new("Error")

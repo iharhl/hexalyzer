@@ -1,17 +1,18 @@
 use eframe::egui;
-use eframe::egui::{CentralPanel, Color32, Context, Label, ScrollArea, TextStyle};
 use super::HexViewer;
 
 
 impl HexViewer {
-    pub(crate) fn show_central_workspace(&mut self, ctx: &Context) {
+    pub(crate) fn show_central_workspace(&mut self, ctx: &egui::Context) {
         let filename = self.ih.filepath
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "-".to_string());
 
-        // Left side
-        egui::SidePanel::left("left_panel").show(ctx, |ui| {
+        // LEFT PANEL
+        egui::SidePanel::left("left_panel")
+            .width_range(200.0..=350.0)
+            .show(ctx, |ui| {
             egui::CollapsingHeader::new("File Information")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -81,20 +82,23 @@ impl HexViewer {
                         });
                 });
         });
-        // Right side
+
+        // RIGHT PANEL
         egui::SidePanel::right("search_panel").show(ctx, |ui| {
             ui.label("Search panel");
         });
-        // Cental view
-        CentralPanel::default().show(ctx, |ui| {
+
+        // CENTRAL VIEW
+        egui::CentralPanel::default().show(ctx, |ui| {
             let bytes_per_row = 16;
             // Same as (self.max_addr - self.min_addr) / bytes_per_row
             // but division rounds result up
-            let total_rows = ((self.max_addr - self.min_addr) + bytes_per_row - 1) / bytes_per_row;
+            let total_rows = ((self.max_addr - self.min_addr) + bytes_per_row - 1) /
+                bytes_per_row;
             // Get row height in pixels (depends on font size)
-            let row_height = ui.text_style_height(&TextStyle::Monospace);
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
 
-            ScrollArea::vertical()
+            egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show_rows(ui, row_height, total_rows, |ui, row_range| {
                     //
@@ -111,29 +115,33 @@ impl HexViewer {
                             ui.add_space(16.0);
 
                             // Hex bytes
-                            for i in start..end {
-                                let byte = self.byte_addr_map.get(&i).copied().unwrap_or(0xFF);
-                                let is_selected = self.selected == Some((i, byte));
+                            for addr in start..end {
+                                let byte = self.byte_addr_map.get(&addr).copied();
+                                let is_selected = self.selected == Some((addr, byte.unwrap_or(0)));
 
                                 // Change color of every other byte for better readability
-                                let bg_color = if i % 2 == 0 {
-                                    Color32::from_gray(210)
+                                let bg_color = if addr % 2 == 0 {
+                                    egui::Color32::from_gray(210)
                                 } else {
-                                    Color32::from_gray(160) // light gray
+                                    egui::Color32::from_gray(160) // light gray
                                 };
 
                                 // Each byte is a button
+                                let mut display_value = "--".to_string();
+                                if let Some(b) = byte {
+                                    display_value = format!("{:02X}", b);
+                                }
                                 let button = ui.add_sized(
                                     [21.0, 18.0],
-                                    egui::Button::new(egui::RichText::new(format!("{:02X}", byte))
+                                    egui::Button::new(egui::RichText::new(display_value)
                                                           .monospace()
                                                           .size(12.0)
                                                           .color(bg_color),
-                                    ).fill(Color32::from_white_alpha(0)), // fully transparent,
+                                    ).fill(egui::Color32::from_white_alpha(0)), // fully transparent,
                                 );
 
-                                if button.clicked() {
-                                    self.selected = Some((i, byte));
+                                if button.clicked() && byte.is_some() {
+                                    self.selected = Some((addr, byte.unwrap_or(0)));
                                 }
 
                                 if is_selected {
@@ -141,13 +149,13 @@ impl HexViewer {
                                     ui.painter().rect_filled(
                                         button.rect,
                                         0.0,
-                                        Color32::from_rgba_premultiplied(33, 81, 109, 20),
+                                        egui::Color32::from_rgba_premultiplied(33, 81, 109, 20),
                                         // 31, 53, 68
                                     );
                                 }
 
                                 // Add space every 8 bytes
-                                if (i + 1) % 8 == 0 {
+                                if (addr + 1) % 8 == 0 {
                                     ui.add_space(5.0);
                                 } else {
                                     // Make space between buttons as small as possible
@@ -160,34 +168,33 @@ impl HexViewer {
 
                             // ASCII representation
                             for i in start..end {
-                                // TODO: Retrieving values once again -> not optimal
                                 let mut ch = ' ';
-                                let mut byte = 0;
+                                let mut byte = None;
                                 if let Some(b) = self.byte_addr_map.get(&i).copied() {
-                                    byte = b;
+                                    byte = Some(b);
                                     ch = if b.is_ascii_graphic() {
                                         b as char
                                     } else {
                                         '.'
                                     }
                                 }
-                                let is_selected = self.selected == Some((i, byte));
+                                let is_selected = self.selected == Some((i, byte.unwrap_or(0)));
 
-                                let label = ui.add(Label::new(
+                                let label = ui.add(egui::Label::new(
                                     egui::RichText::new(ch.to_string())
-                                        .color(Color32::from_gray(160))
+                                        .color(egui::Color32::from_gray(160))
                                         .monospace(),
                                 ));
 
-                                if label.clicked() {
-                                    self.selected = Some((i, 0)); // TODO: bug
+                                if label.clicked() && byte.is_some() {
+                                    self.selected = Some((i, byte.unwrap()));
                                 }
 
                                 if is_selected {
                                     ui.painter().rect_filled(
                                         label.rect,
                                         0.0,
-                                        Color32::from_rgba_premultiplied(33, 81, 109, 20),
+                                        egui::Color32::from_rgba_premultiplied(33, 81, 109, 20),
                                     );
                                 }
                             }

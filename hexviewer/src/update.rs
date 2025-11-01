@@ -1,5 +1,5 @@
-use eframe::egui::{Context};
-use eframe::{Frame};
+use eframe;
+use eframe::egui;
 use super::HexViewer;
 
 //
@@ -16,7 +16,7 @@ use super::HexViewer;
 
 
 impl eframe::App for HexViewer {
-    fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show_top_bar(ctx);
         self.show_popup_if_error(ctx);
         self.show_central_workspace(ctx);
