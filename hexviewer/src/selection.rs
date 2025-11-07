@@ -9,7 +9,7 @@ pub(crate) struct Selection {
 
 impl Selection {
     /// Check if provided addr is within the selection range
-    pub fn is_addr_within_range(&self, addr: usize) -> bool {
+    pub(crate) fn is_addr_within_range(&self, addr: usize) -> bool {
         if let Some(range) = self.range {
             if range[0] < range[1] {
                 return range[0] <= addr && range[1] >= addr;
@@ -19,12 +19,19 @@ impl Selection {
         false
     }
     /// Extend selection range with provided addr
-    pub fn update(&mut self, addr: usize) {
+    pub(crate) fn update(&mut self, addr: usize) {
         if self.released {
             self.released = false;
             self.range = None;
         }
         let sel = self.range.get_or_insert([addr, addr]);
         sel[1] = addr;
+    }
+    /// Is only one byte field selected
+    pub(crate) fn is_single_byte(&self) -> bool {
+        if self.range.is_none() {
+            return false;
+        }
+        self.range.unwrap()[0] == self.range.unwrap()[1]
     }
 }

@@ -29,8 +29,7 @@ impl HexViewer {
             .title_bar(false)
             .show(ctx, |ui| {
                 ui.label(
-                    "Error during intelhex parsing:\n".to_string()
-                        + self.error.as_ref().unwrap(),
+                    "Error during intelhex parsing:\n".to_string() + self.error.as_ref().unwrap(),
                 );
 
                 // Add space before close button

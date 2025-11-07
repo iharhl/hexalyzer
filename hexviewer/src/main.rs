@@ -1,3 +1,4 @@
+mod edit;
 mod error;
 mod hexviewer;
 mod selection;
@@ -32,12 +33,12 @@ impl eframe::App for HexViewer {
     }
 }
 
-
 // TODO for MVP:
-// 1. Hex bytes editing
+// 1. Hex bytes editing                                 ===> DONE
 // 2. Search feature
 // 3. Floats nad utf-8 support in data inspector
 // 4. Add line with failure in error popup
 // 5. Verify export works OK
 // 6. Add content to help
 // 7. Verify performance acceptable (cap if needed)
+// 8. Polish up
