@@ -1,4 +1,5 @@
 use super::HexViewer;
+use super::hexviewer::Endianness;
 use eframe::egui;
 
 impl HexViewer {
@@ -11,14 +12,15 @@ impl HexViewer {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "-".to_string());
 
-        // LEFT PANEL
+        // LEFT PANEL (FILE INFORMATION & DATA INSPECTOR)
         egui::SidePanel::left("left_panel")
             .exact_width(250.0)
             .show(ctx, |ui| {
-                // File Info
+                // FILE INFORMATION
                 egui::CollapsingHeader::new("File Information")
                     .default_open(true)
                     .show(ui, |ui| {
+                        ui.add_space(5.0);
                         egui::Grid::new("file_info_grid")
                             .num_columns(2) // two columns: label + value
                             .spacing([30.0, 4.0]) // horizontal & vertical spacing
@@ -30,12 +32,17 @@ impl HexViewer {
                                 ui.label(format!("{} bytes", self.ih.size));
                                 ui.end_row();
                             });
+                        ui.add_space(5.0);
                     });
 
-                // Data Inspector
+                // DATA INSPECTOR
                 egui::CollapsingHeader::new("Data Inspector")
                     .default_open(true)
                     .show(ui, |ui| {
+                        ui.add_space(5.0);
+                        ui.radio_value(&mut self.endianness, Endianness::Little, "Little Endian");
+                        ui.radio_value(&mut self.endianness, Endianness::Big, "Big Endian");
+                        ui.add_space(5.0);
                         egui::Grid::new("data_inspector_grid")
                             .num_columns(2) // two columns: label & value
                             .spacing([20.0, 4.0]) // horizontal & vertical spacing
@@ -52,16 +59,15 @@ impl HexViewer {
                                 }
 
                                 let sel = self.selected.range.as_ref().unwrap();
-                                let sel_range = if sel[0] <= sel[1] {
-                                    sel[0]..=sel[1]
-                                } else {
-                                    sel[1]..=sel[0]
-                                };
-                                let bytes: Vec<u8> = self
+                                let mut bytes: Vec<u8> = self
                                     .byte_addr_map
-                                    .range(sel_range)
+                                    .range(sel.iter().min().unwrap()..=sel.iter().max().unwrap())
                                     .map(|(_, &b)| b)
                                     .collect();
+
+                                if self.endianness == Endianness::Big && bytes.len() > 1 {
+                                    bytes.reverse();
+                                }
 
                                 match bytes.len() {
                                     1 => {
@@ -75,13 +81,13 @@ impl HexViewer {
                                     2 => {
                                         ui.label("u16");
                                         ui.label(
-                                            u16::from_le_bytes(bytes.clone().try_into().unwrap())
+                                            u16::from_le_bytes(bytes.as_slice().try_into().unwrap())
                                                 .to_string(),
                                         );
                                         ui.end_row();
                                         ui.label("i16");
                                         ui.label(
-                                            i16::from_le_bytes(bytes.try_into().unwrap())
+                                            i16::from_le_bytes(bytes.as_slice().try_into().unwrap())
                                                 .to_string(),
                                         );
                                         ui.end_row();
@@ -89,19 +95,19 @@ impl HexViewer {
                                     4 => {
                                         ui.label("u32");
                                         ui.label(
-                                            u32::from_le_bytes(bytes.clone().try_into().unwrap())
+                                            u32::from_le_bytes(bytes.as_slice().try_into().unwrap())
                                                 .to_string(),
                                         );
                                         ui.end_row();
                                         ui.label("i32");
                                         ui.label(
-                                            i32::from_le_bytes(bytes.clone().try_into().unwrap())
+                                            i32::from_le_bytes(bytes.as_slice().try_into().unwrap())
                                                 .to_string(),
                                         );
                                         ui.end_row();
                                         // TODO: fix display of f32
                                         // ui.label("f32");
-                                        // ui.label(f32::from_le_bytes(bytes.clone().try_into().unwrap()).to_string());
+                                        // ui.label(f32::from_le_bytes(bytes.as_slice().try_into().unwrap()).to_string());
                                         // ui.end_row();
                                     }
                                     8 => {
@@ -119,7 +125,7 @@ impl HexViewer {
                                         ui.end_row();
                                         // TODO: fix display of f64
                                         // ui.label("f64");
-                                        // ui.label(f64::from_le_bytes(bytes.clone().try_into().unwrap()).to_string());
+                                        // ui.label(f64::from_le_bytes(bytes.as_slice().try_into().unwrap()).to_string());
                                         // ui.end_row();
                                     }
                                     _ => {
@@ -169,17 +175,8 @@ impl HexViewer {
                             // Hex bytes
                             for addr in start..end {
                                 let byte = self.byte_addr_map.get(&addr).copied();
-
-                                let mut is_selected = false;
-                                if let Some(s) = &self.selected.range
-                                    && byte.is_some()
-                                {
-                                    is_selected = if s[0] < s[1] {
-                                        s[0] <= addr && s[1] >= addr
-                                    } else {
-                                        s[1] <= addr && s[0] >= addr
-                                    }
-                                };
+                                let is_selected =
+                                    byte.is_some() && self.selected.is_addr_within_range(addr);
 
                                 // Change color of every other byte for better readability
                                 let bg_color = if addr % 2 == 0 {
@@ -212,12 +209,7 @@ impl HexViewer {
                                     && byte.is_some()
                                     && button.rect.contains(pointer_hover.unwrap())
                                 {
-                                    if self.selected.released {
-                                        self.selected.released = false;
-                                        self.selected.range = None;
-                                    }
-                                    let sel = self.selected.range.get_or_insert([addr, addr]);
-                                    sel[1] = addr;
+                                    self.selected.update(addr);
                                 }
 
                                 if !pointer_down {
@@ -255,16 +247,8 @@ impl HexViewer {
                                     ch = if b.is_ascii_graphic() { b as char } else { '.' }
                                 }
 
-                                let mut is_selected = false;
-                                if let Some(s) = &self.selected.range
-                                    && byte.is_some()
-                                {
-                                    is_selected = if s[0] < s[1] {
-                                        s[0] <= addr && s[1] >= addr
-                                    } else {
-                                        s[1] <= addr && s[0] >= addr
-                                    }
-                                };
+                                let is_selected =
+                                    byte.is_some() && self.selected.is_addr_within_range(addr);
 
                                 let label = ui.add(egui::Label::new(
                                     egui::RichText::new(ch.to_string())
@@ -280,12 +264,7 @@ impl HexViewer {
                                     && byte.is_some()
                                     && label.rect.contains(pointer_hover.unwrap())
                                 {
-                                    if self.selected.released {
-                                        self.selected.released = false;
-                                        self.selected.range = None;
-                                    }
-                                    let sel = self.selected.range.get_or_insert([addr, addr]);
-                                    sel[1] = addr;
+                                    self.selected.update(addr);
                                 }
 
                                 if !pointer_down {

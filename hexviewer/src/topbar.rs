@@ -20,6 +20,8 @@ impl HexViewer {
                             self.error = Some(msg.to_string());
                         } else {
                             self.ih = ih.unwrap();
+                            // Clear the map if another hex was loaded before
+                            self.byte_addr_map.clear();
                             // Fill data array
                             for (addr, byte) in &self.ih.to_btree_map() {
                                 self.byte_addr_map.insert(*addr, *byte);

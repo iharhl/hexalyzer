@@ -1,10 +1,12 @@
+use super::selection::Selection;
 use intelhex::IntelHex;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default)]
-pub(crate) struct Selection {
-    pub(crate) range: Option<[usize; 2]>,
-    pub(crate) released: bool,
+#[derive(Default, PartialEq)]
+pub enum Endianness {
+    #[default]
+    Little,
+    Big,
 }
 
 #[derive(Default)]
@@ -14,5 +16,6 @@ pub struct HexViewer {
     pub min_addr: usize,
     pub max_addr: usize,
     pub selected: Selection,
+    pub endianness: Endianness,
     pub error: Option<String>,
 }
