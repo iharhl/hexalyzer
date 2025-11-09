@@ -1,5 +1,4 @@
 use super::HexViewer;
-use super::hexviewer::Endianness;
 use eframe::egui;
 
 impl HexViewer {
@@ -14,7 +13,7 @@ impl HexViewer {
 
         // LEFT PANEL (FILE INFORMATION & DATA INSPECTOR)
         egui::SidePanel::left("left_panel")
-            .exact_width(250.0)
+            .exact_width(280.0)
             .show(ctx, |ui| {
                 // FILE INFORMATION
                 egui::CollapsingHeader::new("File Information")
@@ -40,116 +39,9 @@ impl HexViewer {
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.add_space(5.0);
-                        ui.radio_value(&mut self.endianness, Endianness::Little, "Little Endian");
-                        ui.radio_value(&mut self.endianness, Endianness::Big, "Big Endian");
-                        ui.add_space(5.0);
-                        egui::Grid::new("data_inspector_grid")
-                            .num_columns(2) // two columns: label & value
-                            .spacing([20.0, 4.0]) // horizontal & vertical spacing
-                            .show(ui, |ui| {
-                                ui.heading("Type");
-                                ui.heading("Value");
-                                ui.end_row();
-
-                                if self.selection.range.is_none() {
-                                    ui.label("--");
-                                    ui.label("--");
-                                    ui.end_row();
-                                    return;
-                                }
-
-                                let sel = self.selection.range.as_ref().unwrap();
-                                let mut bytes: Vec<u8> = self
-                                    .byte_addr_map
-                                    .range(sel.iter().min().unwrap()..=sel.iter().max().unwrap())
-                                    .map(|(_, &b)| b)
-                                    .collect();
-
-                                if self.endianness == Endianness::Big && bytes.len() > 1 {
-                                    bytes.reverse();
-                                }
-
-                                match bytes.len() {
-                                    1 => {
-                                        ui.label("u8");
-                                        ui.label(u8::from_le_bytes([bytes[0]]).to_string());
-                                        ui.end_row();
-                                        ui.label("i8");
-                                        ui.label(i8::from_le_bytes([bytes[0]]).to_string());
-                                        ui.end_row();
-                                    }
-                                    2 => {
-                                        ui.label("u16");
-                                        ui.label(
-                                            u16::from_le_bytes(
-                                                bytes.as_slice().try_into().unwrap(),
-                                            )
-                                            .to_string(),
-                                        );
-                                        ui.end_row();
-                                        ui.label("i16");
-                                        ui.label(
-                                            i16::from_le_bytes(
-                                                bytes.as_slice().try_into().unwrap(),
-                                            )
-                                            .to_string(),
-                                        );
-                                        ui.end_row();
-                                    }
-                                    4 => {
-                                        ui.label("u32");
-                                        ui.label(
-                                            u32::from_le_bytes(
-                                                bytes.as_slice().try_into().unwrap(),
-                                            )
-                                            .to_string(),
-                                        );
-                                        ui.end_row();
-                                        ui.label("i32");
-                                        ui.label(
-                                            i32::from_le_bytes(
-                                                bytes.as_slice().try_into().unwrap(),
-                                            )
-                                            .to_string(),
-                                        );
-                                        ui.end_row();
-                                        // TODO: fix display of f32
-                                        // ui.label("f32");
-                                        // ui.label(f32::from_le_bytes(bytes.as_slice().try_into().unwrap()).to_string());
-                                        // ui.end_row();
-                                    }
-                                    8 => {
-                                        ui.label("u64");
-                                        ui.label(
-                                            u64::from_le_bytes(bytes.clone().try_into().unwrap())
-                                                .to_string(),
-                                        );
-                                        ui.end_row();
-                                        ui.label("i64");
-                                        ui.label(
-                                            i64::from_le_bytes(bytes.clone().try_into().unwrap())
-                                                .to_string(),
-                                        );
-                                        ui.end_row();
-                                        // TODO: fix display of f64
-                                        // ui.label("f64");
-                                        // ui.label(f64::from_le_bytes(bytes.as_slice().try_into().unwrap()).to_string());
-                                        // ui.end_row();
-                                    }
-                                    _ => {
-                                        ui.label("--");
-                                        ui.label("--");
-                                        ui.end_row();
-                                    }
-                                }
-                            });
+                        self.show_data_inspector_contents(ui);
                     });
             });
-
-        // RIGHT PANEL
-        egui::SidePanel::right("search_panel").show(ctx, |ui| {
-            ui.label("Search panel");
-        });
 
         // CENTRAL VIEW
         egui::CentralPanel::default().show(ctx, |ui| {

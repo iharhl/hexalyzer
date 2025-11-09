@@ -22,7 +22,7 @@ impl HexViewer {
                             self.ih = ih.unwrap();
                             // Clear the map if another hex was loaded before
                             self.byte_addr_map.clear();
-                            // Fill data array
+                            // Fill data array (TODO: don't store the data at all - access directly via ih)
                             for (addr, byte) in &self.ih.to_btree_map() {
                                 self.byte_addr_map.insert(*addr, *byte);
                             }
@@ -37,6 +37,9 @@ impl HexViewer {
                         && let Some(path) = rfd::FileDialog::new().set_title("Save As").save_file()
                     {
                         // TODO: handle saving going wrong
+                        // TODO: implement proper solution
+                        let vec: Vec<(usize, u8)> = self.byte_addr_map.iter().map(|(&k, &v)| (k, v)).collect();
+                        self.ih.update_buffer_slice(vec.as_slice()).expect("TODO: panic message");
                         self.ih.write_hex(path).expect("Failed to save the file");
                     }
                 });
