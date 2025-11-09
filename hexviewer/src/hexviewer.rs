@@ -1,4 +1,4 @@
-use super::edit::Editor;
+use super::editor::Editor;
 use super::selection::Selection;
 use intelhex::IntelHex;
 use std::collections::BTreeMap;

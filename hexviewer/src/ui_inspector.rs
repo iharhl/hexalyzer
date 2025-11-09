@@ -53,7 +53,7 @@ fn format_float<T: Into<f64>>(float_value: T) -> String {
 }
 
 impl HexViewer {
-    pub fn show_data_inspector_contents(&mut self, ui: &mut Ui) {
+    pub(crate) fn show_data_inspector_contents(&mut self, ui: &mut Ui) {
         ui.radio_value(&mut self.endianness, Endianness::Little, "Little Endian");
         ui.radio_value(&mut self.endianness, Endianness::Big, "Big Endian");
 

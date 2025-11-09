@@ -1,10 +1,11 @@
-mod edit;
-mod error;
+mod editor;
+mod ui_error;
 mod hexviewer;
-mod inspector;
+mod ui_inspector;
 mod selection;
-mod topbar;
-mod workspace;
+mod ui_topbar;
+mod ui_workspace;
+mod ui_fileinfo;
 
 use eframe::egui;
 use eframe::egui::ViewportBuilder;
