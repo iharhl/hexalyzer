@@ -59,4 +59,12 @@ impl EventManager {
             None
         })
     }
+
+    pub(crate) fn is_pointer_down(ui: &egui::Ui) -> bool {
+        ui.input(|i| i.pointer.primary_down())
+    }
+
+    pub(crate) fn get_pointer_hover(ui: &egui::Ui) -> Option<egui::Pos2> {
+        ui.input(|i| i.pointer.hover_pos())
+    }
 }
