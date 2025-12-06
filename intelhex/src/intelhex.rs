@@ -34,6 +34,7 @@ pub struct IntelHex {
     pub filepath: PathBuf,
     pub size: usize,
     pub start_addr: StartAddress,
+    max_payload_size: usize,
     offset: usize,
     buffer: BTreeMap<usize, u8>,
 }
@@ -58,6 +59,7 @@ impl IntelHex {
             filepath: PathBuf::new(),
             size: 0,
             offset: 0,
+            max_payload_size: 16,
             start_addr: StartAddress {
                 rtype: None,
                 bytes: None,
@@ -191,7 +193,7 @@ impl IntelHex {
         let mut curr_high_addr = 0;
         let mut chunk_start: Option<u16> = None;
         let mut prev_addr: Option<usize> = None;
-        let mut chunk_data = Vec::new();
+        let mut chunk_data = Vec::with_capacity(self.max_payload_size);
 
         for (addr, byte) in &self.buffer {
             // Split address into low and high
@@ -223,7 +225,7 @@ impl IntelHex {
 
             // If gap detected or chunk full -> flush
             if let Some(prev) = prev_addr
-                && ((*addr != prev + 1) || chunk_data.len() >= 16)
+                && ((*addr != prev + 1) || chunk_data.len() >= self.max_payload_size)
             {
                 // Write data record
                 let record = Record::create(chunk_start.unwrap(), RecordType::Data, &chunk_data)?;
@@ -250,7 +252,7 @@ impl IntelHex {
         let record = Record::create(chunk_start.unwrap(), RecordType::Data, &chunk_data)?;
         writeln!(writer, "{}", record)?;
 
-        // Write EOL record
+        // Write EOF record
         let record = Record::create(0, RecordType::EndOfFile, &[])?;
         write!(writer, "{}", record)?; // writes a line (no newline)
 
@@ -271,17 +273,33 @@ impl IntelHex {
         self.buffer.clone()
     }
 
-    // TODO
-    pub fn get_min_addr(&self) -> usize {
-        *self.buffer.keys().min().unwrap()
+    /// Get the smallest address present in the data buffer.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhex::IntelHex;
+    ///
+    /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
+    /// let min_addr: Option<usize> = ih.get_min_addr();
+    /// ```
+    pub fn get_min_addr(&self) -> Option<usize> {
+        self.buffer.keys().min().copied()
     }
 
-    // TODO
-    pub fn get_max_addr(&self) -> usize {
-        *self.buffer.keys().max().unwrap()
+    /// Get the highest address present in the data buffer.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhex::IntelHex;
+    ///
+    /// let ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
+    /// let max_addr: Option<usize> = ih.get_max_addr();
+    /// ```
+    pub fn get_max_addr(&self) -> Option<usize> {
+        self.buffer.keys().max().copied()
     }
 
-    /// Get byte from IntelHex at provided address.
+    /// Get byte from IntelHex at the provided address.
     ///
     /// # Example
     /// ```
@@ -294,7 +312,7 @@ impl IntelHex {
         self.buffer.get(&address).copied()
     }
 
-    /// Get array of bytes from IntelHex at provided addresses.
+    /// Get an array of bytes from IntelHex at provided addresses.
     ///
     /// # Example
     /// ```
@@ -334,7 +352,7 @@ impl IntelHex {
         }
     }
 
-    /// Update array of bytes in IntelHex at provided addresses.
+    /// Update the array of bytes in IntelHex at provided addresses.
     ///
     /// # Example
     /// ```
@@ -357,13 +375,311 @@ impl IntelHex {
         }
         Ok(())
     }
+
+    /// Update the max payload size (number of bytes) per record when writing IntelHex file.
+    /// Default = 16.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhex::IntelHex;
+    ///
+    /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_example_1.hex").unwrap();
+    /// ih.set_max_payload_size(0xFF);      // set to u8 max
+    /// ih.write_hex("build/ex2/ih.hex");   // now data records can have up to 255 bytes of payload
+    /// ```
+    pub fn set_max_payload_size(&mut self, size: u8) -> Result<(), IntelHexError> {
+        if size == 0 {
+            return Err(IntelHexError::RecordInvalidPayloadLength);
+        }
+        self.max_payload_size = size as usize;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
+
     #[test]
-    fn test_foo() {
-        assert!(true);
+    fn test_set_max_payload_size_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let new_payload_length = 2;
+
+        // Act
+        let res = ih.set_max_payload_size(new_payload_length);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.max_payload_size, new_payload_length as usize);
+    }
+
+    #[test]
+    fn test_set_max_payload_size_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let new_payload_length = 0;
+        let default_payload_length = ih.max_payload_size;
+
+        // Act
+        let res = ih.set_max_payload_size(new_payload_length);
+
+        // Assert
+        assert!(res.is_err());
+        assert_eq!(ih.max_payload_size, default_payload_length);
+    }
+
+    #[test]
+    fn test_get_byte_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let addr = 0x1234;
+        let value = 0xFF;
+        ih.buffer.insert(addr, value);
+
+        // Act
+        let byte = ih.get_byte(addr);
+
+        // Assert
+        assert_eq!(byte, Some(value));
+    }
+
+    #[test]
+    fn test_get_byte_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let addr = 0x1234;
+        let value = 0xFF;
+        ih.buffer.insert(addr, value);
+
+        // Act
+        let byte = ih.get_byte(addr - 1);
+
+        // Assert
+        assert!(byte.is_none());
+    }
+
+    #[test]
+    fn test_get_buffer_slice_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut addr_vec = Vec::with_capacity(length);
+        let mut expected_res_vec = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            addr_vec.push(addr); // construct addr vector
+            ih.buffer.insert(addr, addr as u8); // insert key-value pair into the map
+            expected_res_vec.push(addr as u8); // push the value into expected result vec
+        }
+
+        // Act
+        let res_vec: Option<Vec<u8>> = ih.get_buffer_slice(&addr_vec);
+
+        // Assert
+        assert_eq!(res_vec, Some(expected_res_vec));
+    }
+
+    #[test]
+    fn test_get_buffer_slice_with_gaps() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut addr_vec = Vec::with_capacity(length);
+        let mut expected_res_vec = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            addr_vec.push(addr * 2); // construct addr vector
+            ih.buffer.insert(addr * 2, addr as u8); // insert key-value pair into the map
+            expected_res_vec.push(addr as u8); // push the value into expected result vec
+        }
+
+        // Act
+        let res_vec: Option<Vec<u8>> = ih.get_buffer_slice(&addr_vec);
+
+        // Assert
+        assert_eq!(res_vec, Some(expected_res_vec));
+    }
+
+    #[test]
+    fn test_get_buffer_slice_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut addr_vec = Vec::with_capacity(length);
+        let mut expected_res_vec = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            addr_vec.push(addr); // construct addr vector
+            ih.buffer.insert(addr, addr as u8); // insert key-value pair into the map
+            expected_res_vec.push(addr as u8); // push the value into expected result vec
+        }
+        ih.buffer.pop_last(); // pop the last addr
+
+        // Act
+        let res_vec: Option<Vec<u8>> = ih.get_buffer_slice(&addr_vec);
+
+        // Assert
+        assert_eq!(res_vec, None);
+    }
+
+    #[test]
+    fn test_update_byte_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let addr = 0x1234;
+        let value = 0xFF;
+        ih.buffer.insert(addr, value);
+
+        // Act
+        let res = ih.update_byte(addr, value - 1);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(*ih.buffer.get(&addr).unwrap_or(&0), value - 1);
+    }
+
+    #[test]
+    fn test_update_byte_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let addr = 0x1234;
+        let value = 0xFF;
+        ih.buffer.insert(addr, value);
+
+        // Act
+        let res = ih.update_byte(addr - 1, value - 1);
+
+        // Assert
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_update_buffer_slice_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            update_map.push((addr, (addr - 1) as u8)); // construct vector with addr & new value
+            ih.buffer.insert(addr, addr as u8); // insert key-value pair into the map
+        }
+
+        // Act
+        let res = ih.update_buffer_slice(&update_map);
+
+        // Assert
+        assert!(res.is_ok());
+        for addr in addr_start..=addr_start + length {
+            assert_eq!(*ih.buffer.get(&addr).unwrap_or(&0), (addr - 1) as u8);
+        }
+    }
+
+    #[test]
+    fn test_update_buffer_slice_with_gap() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            update_map.push((addr * 2, (addr - 1) as u8)); // construct vector with addr & new value
+            ih.buffer.insert(addr * 2, addr as u8); // insert key-value pair into the map
+        }
+
+        // Act
+        let res = ih.update_buffer_slice(&update_map);
+
+        // Assert
+        assert!(res.is_ok());
+        for addr in addr_start..=addr_start + length {
+            assert_eq!(*ih.buffer.get(&(addr * 2)).unwrap_or(&0), (addr - 1) as u8);
+        }
+    }
+
+    #[test]
+    fn test_update_buffer_slice_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 16;
+        let length = 10;
+
+        let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
+
+        for addr in addr_start..=addr_start + length {
+            update_map.push((addr, (addr - 1) as u8)); // construct vector with addr & new value
+            ih.buffer.insert(addr, addr as u8); // insert key-value pair into the map
+        }
+        ih.buffer.pop_last(); // pop the last addr
+
+        // Act
+        let res = ih.update_buffer_slice(&update_map);
+
+        // Assert
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_get_min_and_max_addr_valid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        let addr_start = 10;
+        let length = 10;
+
+        for addr in addr_start..=addr_start + length {
+            ih.buffer.insert(addr, 0); // insert key-value pair into the map
+        }
+
+        // Act
+        let min_addr = ih.get_min_addr();
+        let max_addr = ih.get_max_addr();
+
+        // Assert
+        assert_eq!(min_addr, Some(addr_start));
+        assert_eq!(max_addr, Some(addr_start + length));
+
+        // Arrange
+        ih.buffer.clear();
+        ih.buffer.insert(0, 0);
+
+        // Act
+        let min_addr = ih.get_min_addr();
+        let max_addr = ih.get_max_addr();
+
+        // Assert
+        assert_eq!(min_addr, Some(0));
+        assert_eq!(max_addr, Some(0));
+    }
+
+    #[test]
+    fn test_get_min_and_max_addr_invalid() {
+        // Arrange
+        let ih = IntelHex::new();
+
+        // Act
+        let min_addr = ih.get_min_addr();
+        let max_addr = ih.get_max_addr();
+
+        // Assert
+        assert!(min_addr.is_none());
+        assert!(max_addr.is_none());
     }
 }

@@ -21,8 +21,8 @@ impl HexViewer {
                         } else {
                             self.ih = ih.unwrap();
                             // Fill min/max address
-                            self.addr_range.start = self.ih.get_min_addr();
-                            self.addr_range.end = self.ih.get_max_addr();
+                            self.addr_range.start = self.ih.get_min_addr().unwrap();
+                            self.addr_range.end = self.ih.get_max_addr().unwrap();
                         }
                     }
 
