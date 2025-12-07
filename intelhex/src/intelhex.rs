@@ -1,7 +1,7 @@
 //! The 'intelhex' module defines the ['IntelHex'] struct which provides APIs for
 //! loading, modifying and writing Intel HEX files.
 
-use crate::error::IntelHexError;
+use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -72,16 +72,21 @@ impl IntelHex {
     ///
     fn parse(&mut self, raw_contents: &str) -> Result<(), IntelHexError> {
         // Iterate over lines of records
-        for line in raw_contents.lines() {
+        for (i, line) in raw_contents.lines().enumerate() {
             // Parse the record
-            let record = Record::parse(line)?;
+            let record = match Record::parse(line) {
+                Ok(rec) => rec,
+                Err(err) => {
+                    return Err(IntelHexError::ParseRecordError(err, i + 1));
+                }
+            };
 
             // Validate checksum of the record
             let expected_checksum = Record::calculate_checksum_from_self(&record);
             if record.checksum != expected_checksum {
-                return Err(IntelHexError::RecordChecksumMismatch(
-                    expected_checksum,
-                    record.checksum,
+                return Err(IntelHexError::ParseRecordError(
+                    IntelHexErrorKind::RecordChecksumMismatch(expected_checksum, record.checksum),
+                    i + 1,
                 ));
             }
 
@@ -92,7 +97,10 @@ impl IntelHex {
                     for byte in &record.data {
                         if self.buffer.insert(addr, *byte).is_some() {
                             // Address overlap
-                            return Err(IntelHexError::RecordAddressOverlap(addr));
+                            return Err(IntelHexError::ParseRecordError(
+                                IntelHexErrorKind::RecordAddressOverlap(addr),
+                                i + 1,
+                            ));
                         }
                         addr += 1;
                     }
@@ -106,7 +114,10 @@ impl IntelHex {
                 }
                 RecordType::StartSegmentAddress | RecordType::StartLinearAddress => {
                     if !self.start_addr.is_empty() {
-                        return Err(IntelHexError::DuplicateStartAddress);
+                        return Err(IntelHexError::ParseRecordError(
+                            IntelHexErrorKind::DuplicateStartAddress,
+                            i + 1,
+                        ));
                     }
                     self.start_addr.rtype = Some(record.rtype);
                     // Sanity checking is done during record parsing, thus directly
@@ -348,7 +359,9 @@ impl IntelHex {
             *v = value;
             Ok(())
         } else {
-            Err(IntelHexError::InvalidAddress(address))
+            Err(IntelHexError::SetterError(
+                IntelHexErrorKind::InvalidAddress(address),
+            ))
         }
     }
 
@@ -370,7 +383,9 @@ impl IntelHex {
             if let Some(byte) = self.buffer.get_mut(&addr) {
                 *byte = value;
             } else {
-                return Err(IntelHexError::InvalidAddress(addr));
+                return Err(IntelHexError::SetterError(
+                    IntelHexErrorKind::InvalidAddress(addr),
+                ));
             }
         }
         Ok(())
@@ -389,7 +404,9 @@ impl IntelHex {
     /// ```
     pub fn set_max_payload_size(&mut self, size: u8) -> Result<(), IntelHexError> {
         if size == 0 {
-            return Err(IntelHexError::RecordInvalidPayloadLength);
+            return Err(IntelHexError::SetterError(
+                IntelHexErrorKind::RecordInvalidPayloadLength,
+            ));
         }
         self.max_payload_size = size as usize;
         Ok(())

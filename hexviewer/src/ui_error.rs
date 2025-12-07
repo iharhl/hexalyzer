@@ -28,9 +28,7 @@ impl HexViewer {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .title_bar(false)
             .show(ctx, |ui| {
-                ui.label(
-                    "Error during intelhex parsing:\n".to_string() + self.error.as_ref().unwrap(),
-                );
+                ui.label(self.error.as_ref().unwrap());
 
                 // Add space before close button
                 ui.add_space(10.0);

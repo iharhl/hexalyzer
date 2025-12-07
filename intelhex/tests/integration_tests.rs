@@ -1,4 +1,4 @@
-use intelhex::{IntelHex, IntelHexError};
+use intelhex::{IntelHex, IntelHexError, IntelHexErrorKind};
 use std::fs;
 
 #[test]
@@ -48,10 +48,13 @@ fn test_hex_parsing_returns_error() {
 
     // Assert that the Result is Err
     if let Some(my_err) = ih.unwrap_err().downcast_ref::<IntelHexError>() {
-        assert!(matches!(
-            my_err,
-            IntelHexError::RecordChecksumMismatch(0x55, 0xFF)
-        ));
+        assert_eq!(
+            *my_err,
+            IntelHexError::ParseRecordError(
+                IntelHexErrorKind::RecordChecksumMismatch(0x55, 0xFF),
+                1
+            )
+        );
     } else {
         assert!(false, "Should have failed with error...");
     }

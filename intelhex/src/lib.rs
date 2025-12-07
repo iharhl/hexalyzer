@@ -21,6 +21,6 @@ mod intelhex;
 mod record;
 
 // Public APIs
-pub use error::IntelHexError;
+pub use error::{IntelHexError, IntelHexErrorKind};
 pub use intelhex::{IntelHex, StartAddress};
 pub use record::RecordType;
