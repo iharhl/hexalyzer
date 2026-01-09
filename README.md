@@ -135,7 +135,7 @@ fn main() {
 
 ## History
 
-v0.1.0 (2026-xx-xx) - Initial Release
+v0.1.0 (2026-01-09) - Initial Release
 
 
 ## Potential app improvements
@@ -199,8 +199,9 @@ masks) separate from painting. The painter consumes this without hitting the dat
 
 ### Additional features
 
-1. Support Copy, Undo, Redo, etc.
-2. Support ELF format
-3. Show the current address of the selected byte
-4. Add timestamp (time since epoch) type in the data inspector
-5. Saving an entire app state / session?
+1. Make CLI for `intelhexlib`
+2. Support Copy, Undo, Redo, etc.
+3. Support ELF format
+4. Show the current address of the selected byte
+5. Add timestamp (time since epoch) type in the data inspector
+6. Saving an entire app state / session?
