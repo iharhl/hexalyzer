@@ -1,0 +1,9 @@
+[package]
+name = "intelhexlib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "intelhexlib"
+path = "src/lib.rs"

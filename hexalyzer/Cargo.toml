@@ -1,0 +1,24 @@
+[package]
+name = "hexalyzer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe.workspace = true
+rfd.workspace = true
+intelhexlib.workspace = true
+
+[build-dependencies]
+winresource = "0.1.28"
+
+[package.metadata.packager]
+product_name = "Hexalyzer"
+identifier = "com.github.iharhl.hexalyzer"
+description = "IntelHex viewer and editor app"
+authors = ["Ihar Hlukhau | ihluk@outlook.com"]
+copyright = "Copyright © 2026"
+# Icons for MacOS, Windows and a fallback PNG
+icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon_128x128_win.png"]
+
+[package.metadata.packager.nsis]
+installer_mode = "perMachine"

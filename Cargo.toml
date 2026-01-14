@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "intelhexlib",
+    "hexalyzer",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Ihar Hlukhau | ihluk@outlook.com"]
+license = "MIT"
+description = "Intel HEX parser & hex viewer GUI"
+repository = "https://github.com/iharhl/hexalyzer"
+
+[workspace.dependencies]
+intelhexlib = { path = "intelhexlib" }
+eframe = "0.33.2"
+rfd = "0.16.0"
