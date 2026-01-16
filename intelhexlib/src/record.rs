@@ -4,18 +4,35 @@
 use crate::IntelHexError;
 use crate::error::IntelHexErrorKind;
 use std::fmt::Write;
-use std::ops::Add;
 
-mod ranges {
-    use std::ops::Range;
-    pub const RECORD_LEN_RANGE: Range<usize> = 1..3;
-    pub const RECORD_ADDR_RANGE: Range<usize> = 3..7;
-    pub const RECORD_TYPE_RANGE: Range<usize> = 7..9;
-}
 mod sizes {
-    pub const BYTE_CHAR_LEN: usize = 2;
     pub const SMALLEST_RECORD: usize = (1 + 2 + 1 + 1) * 2; // len + addr + rtype + checksum
     pub const LARGEST_RECORD: usize = SMALLEST_RECORD + 255 * 2;
+    pub const LARGEST_RECORD_HEX: usize = LARGEST_RECORD / 2;
+}
+
+#[allow(clippy::cast_possible_truncation)]
+// A 256-byte lookup table for a fast way to convert ASCII hex to numeric values
+const HEX_TABLE: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut i = 0;
+    while i < 10 {
+        table[b'0' as usize + i] = i as u8;
+        i += 1;
+    }
+    i = 0;
+    while i < 6 {
+        table[b'A' as usize + i] = (i + 10) as u8;
+        table[b'a' as usize + i] = (i + 10) as u8;
+        i += 1;
+    }
+    table
+};
+
+#[allow(clippy::inline_always)]
+#[inline(always)]
+const fn fast_decode(high: u8, low: u8) -> u8 {
+    (HEX_TABLE[high as usize] << 4) | HEX_TABLE[low as usize]
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,14 +47,14 @@ pub enum RecordType {
 }
 
 impl RecordType {
-    fn parse(s: &str) -> Result<Self, IntelHexErrorKind> {
-        match s {
-            "00" => Ok(Self::Data),
-            "01" => Ok(Self::EndOfFile),
-            "02" => Ok(Self::ExtendedSegmentAddress),
-            "03" => Ok(Self::StartSegmentAddress),
-            "04" => Ok(Self::ExtendedLinearAddress),
-            "05" => Ok(Self::StartLinearAddress),
+    const fn parse(n: u8) -> Result<Self, IntelHexErrorKind> {
+        match n {
+            0x00 => Ok(Self::Data),
+            0x01 => Ok(Self::EndOfFile),
+            0x02 => Ok(Self::ExtendedSegmentAddress),
+            0x03 => Ok(Self::StartSegmentAddress),
+            0x04 => Ok(Self::ExtendedLinearAddress),
+            0x05 => Ok(Self::StartLinearAddress),
             _ => Err(IntelHexErrorKind::InvalidRecordType),
         }
     }
@@ -53,25 +70,6 @@ pub struct Record {
 }
 
 impl Record {
-    #[allow(clippy::cast_possible_truncation)]
-    /// Calculate checksum from the Record instance.
-    ///
-    pub(crate) fn calculate_checksum_from_self(&self) -> u8 {
-        // Get length, address and record type byte data
-        let length = self.length as usize;
-        let addr_high_byte = (self.address >> 8) as usize;
-        let addr_low_byte = (self.address & 0xFF) as usize;
-        let rtype = self.rtype as usize;
-
-        // Sum it up with data vector
-        let mut sum: usize = length + addr_high_byte + addr_low_byte + rtype;
-
-        for b in &self.data {
-            sum = sum.add(*b as usize);
-        }
-        (!sum as u8).wrapping_add(1) // two's complement
-    }
-
     /// Calculate checksum from u8 array.
     ///
     pub(crate) fn calculate_checksum(data: &[u8]) -> u8 {
@@ -201,46 +199,57 @@ impl Record {
 
     /// Parse the record string into Record.
     ///
-    pub(crate) fn parse(line: &str) -> Result<Self, IntelHexErrorKind> {
+    pub(crate) fn parse(line: &[u8]) -> Result<Self, IntelHexErrorKind> {
         // Check for start record
-        if !line.starts_with(':') {
+        if line[0] != b':' {
             return Err(IntelHexErrorKind::MissingStartCode);
         }
 
-        let hexdigit_part = &line[1..];
-        let hexdigit_part_len = hexdigit_part.len();
-
-        // Validate all characters are hexadecimal
-        if !hexdigit_part.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Err(IntelHexErrorKind::ContainsInvalidCharacters);
-        }
+        let hex_len = line.len() - 1;
 
         // Validate record's size
-        if hexdigit_part_len < sizes::SMALLEST_RECORD {
+        if hex_len < sizes::SMALLEST_RECORD {
             return Err(IntelHexErrorKind::RecordTooShort);
-        } else if hexdigit_part_len > sizes::LARGEST_RECORD {
+        }
+        if hex_len > sizes::LARGEST_RECORD {
             return Err(IntelHexErrorKind::RecordTooLong);
-        } else if !hexdigit_part_len.is_multiple_of(2) {
+        }
+        if !hex_len.is_multiple_of(2) {
             return Err(IntelHexErrorKind::RecordNotEvenLength);
         }
 
-        // Get record length
-        // UNWRAP: not handled as sanity check on ascii hex digits has been performed above
-        let length = u8::from_str_radix(&line[ranges::RECORD_LEN_RANGE], 16).unwrap_or_default();
+        // Validate all characters are hexadecimal
+        if !&line[1..].iter().all(u8::is_ascii_hexdigit) {
+            return Err(IntelHexErrorKind::ContainsInvalidCharacters);
+        }
 
-        // Check if record end is bigger than the record length itself
-        let data_end = ranges::RECORD_TYPE_RANGE.end + sizes::BYTE_CHAR_LEN * length as usize;
-        let record_end = sizes::BYTE_CHAR_LEN + data_end; // last byte is checksum
-        if record_end != line.len() {
+        // Create an empty hex digit buffer with max size equal to the largest record possible.
+        // Avoids heap allocations of Vec.
+        let mut decoded_hex_buf = [0u8; sizes::LARGEST_RECORD_HEX];
+
+        // Decode hex digits into buffer
+        for (count, i) in (1..hex_len).step_by(2).enumerate() {
+            decoded_hex_buf[count] = fast_decode(line[i], line[i + 1]);
+        }
+
+        // Get record length
+        let length = decoded_hex_buf[0];
+
+        // Create a vector of data for checksum calculation
+        let data_end = 4 + length as usize;
+        let v = decoded_hex_buf[..data_end].to_vec();
+
+        // Check if record's end is bigger than the record length itself
+        let record_end = data_end + 1; // last byte is checksum
+        if record_end != hex_len / 2 {
             return Err(IntelHexErrorKind::RecordInvalidPayloadLength);
         }
 
         // Get record type
-        let rtype = RecordType::parse(&line[ranges::RECORD_TYPE_RANGE])?;
+        let rtype = RecordType::parse(decoded_hex_buf[3])?;
 
         // Get record address
-        // UNWRAP: not handled as sanity check on ascii hex digits has been performed above
-        let address = u16::from_str_radix(&line[ranges::RECORD_ADDR_RANGE], 16).unwrap_or_default();
+        let address = u16::from_be_bytes([decoded_hex_buf[1], decoded_hex_buf[2]]);
 
         // More sanity checks (for length and address)
         match rtype {
@@ -282,27 +291,13 @@ impl Record {
         }
 
         // Get record data payload
-        let mut data: Vec<u8> = Vec::with_capacity(length as usize);
-        for i in (ranges::RECORD_TYPE_RANGE.end..data_end).step_by(sizes::BYTE_CHAR_LEN) {
-            // UNWRAP: not handled as sanity check on ascii hex digits has been performed above
-            let byte =
-                u8::from_str_radix(&line[i..i + sizes::BYTE_CHAR_LEN], 16).unwrap_or_default();
-            data.push(byte);
-        }
+        let data = decoded_hex_buf[4..data_end].to_vec();
 
         // Get checksum
-        // UNWRAP: not handled as sanity check on ascii hex digits has been performed above
-        let checksum = u8::from_str_radix(&line[data_end..record_end], 16).unwrap_or_default();
+        let checksum = decoded_hex_buf[record_end - 1];
 
-        // Construct record instance and validate checksum
-        let record = Self {
-            length,
-            address,
-            rtype,
-            data,
-            checksum,
-        };
-        let calc_checksum = Self::calculate_checksum_from_self(&record);
+        // Validate checksum
+        let calc_checksum = Self::calculate_checksum(&v);
         if calc_checksum != checksum {
             return Err(IntelHexErrorKind::RecordChecksumMismatch(
                 calc_checksum,
@@ -310,7 +305,14 @@ impl Record {
             ));
         }
 
-        Ok(record)
+        // Construct and return record instance
+        Ok(Self {
+            length,
+            address,
+            rtype,
+            data,
+            checksum,
+        })
     }
 }
 

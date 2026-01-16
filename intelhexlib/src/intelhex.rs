@@ -19,8 +19,8 @@ pub struct IntelHex {
     pub filepath: PathBuf,
     /// Intel HEX file size in bytes
     pub size: usize,
-    /// Start address of the Intel HEX file (stores full record as String)
-    pub start_addr: String,
+    /// Start address of the Intel HEX file (stores full record as a byte slice)
+    pub start_addr: Option<[u8; 10]>,
     /// Maximum payload size for data records
     max_payload_size: usize,
     /// Offset of the linear address segment
@@ -60,7 +60,7 @@ impl IntelHex {
             size: 0,
             offset: 0,
             max_payload_size: 16,
-            start_addr: String::new(),
+            start_addr: None,
             buffer: BTreeMap::new(),
         }
     }
@@ -80,19 +80,32 @@ impl IntelHex {
     pub fn clear(&mut self) {
         self.filepath.clear();
         self.size = 0;
-        self.start_addr = String::new();
+        self.start_addr = None;
         self.offset = 0;
         self.buffer.clear();
     }
 
     /// Parse the raw contents of the hex file and fill internal record vector.
     ///
-    fn parse(&mut self, raw_contents: &str) -> Result<(), IntelHexError> {
+    /// # Errors
+    /// - Returns an error if the record is corrupted
+    /// - Returns an error if there is an issue during filling the internal buffer
+    ///
+    pub fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
+        let mut count: usize = 0;
+
         // Iterate over lines of records
-        for (i, line) in raw_contents.lines().enumerate() {
-            // Parse the record
+        for line in raw_bytes.split(|&b| b == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+
+            if line.is_empty() {
+                continue;
+            }
+
+            count += 1;
+
             let record =
-                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, i + 1))?;
+                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, count))?;
 
             // Fill in self
             match record.rtype {
@@ -103,7 +116,7 @@ impl IntelHex {
                             // Address overlap
                             return Err(IntelHexError::ParseRecordError(
                                 IntelHexErrorKind::RecordAddressOverlap(addr),
-                                i + 1,
+                                count + 1,
                             ));
                         }
                         addr += 1;
@@ -117,15 +130,20 @@ impl IntelHex {
                     self.offset = (record.data[0] as usize * 256 + record.data[1] as usize) * 65536;
                 }
                 RecordType::StartSegmentAddress | RecordType::StartLinearAddress => {
-                    if !self.start_addr.is_empty() {
+                    if self.start_addr.is_some() {
                         return Err(IntelHexError::ParseRecordError(
                             IntelHexErrorKind::DuplicateStartAddress,
-                            i + 1,
+                            count + 1,
                         ));
                     }
-                    // Directly store the record string
+                    // Directly store the record slice.
+                    // Error cases are not checked here as it was done during record parsing.
                     // TODO: split legacy and modern way of specifying start address?
-                    self.start_addr = line.to_string();
+                    if line.len() == 10
+                        && let Ok(bytes) = line[1..=10].try_into()
+                    {
+                        self.start_addr = Some(bytes);
+                    }
                 }
             }
         }
@@ -165,20 +183,21 @@ impl IntelHex {
     /// assert_eq!(ih.size, 239);
     /// ```
     pub fn load_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), Box<dyn Error>> {
-        // Read contents of the file
-        let raw_contents: String = std::fs::read_to_string(&filepath)?;
+        // Read the contents of the file
+        let raw_bytes = std::fs::read(&filepath)?;
 
         // Clear provided IntelHex instance
         self.clear();
 
         // Compute the size (in bytes)
-        self.size = raw_contents.len();
+        self.size = raw_bytes.len();
 
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
-        // Parse contents and return
-        self.parse(&raw_contents)?;
+        // Parse contents
+        self.parse(&raw_bytes)?;
+
         Ok(())
     }
 
@@ -276,9 +295,10 @@ impl IntelHex {
         // Wrap in BufWriter for efficient line-by-line writing
         let mut writer = std::io::BufWriter::new(file);
 
-        // Write start address record
-        if !self.start_addr.is_empty() {
-            writeln!(writer, "{}", self.start_addr)?;
+        // Write start address record (raw bytes + newline)
+        if let Some(s) = self.start_addr {
+            writer.write_all(&s)?;
+            writeln!(writer)?;
         }
 
         let mut curr_high_addr = 0;
