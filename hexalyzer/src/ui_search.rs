@@ -1,6 +1,5 @@
 use crate::app::HexSession;
 use eframe::egui;
-use std::collections::btree_map;
 
 #[derive(Default, PartialEq, Clone)]
 struct SearchState {
@@ -110,7 +109,7 @@ impl HexSession {
 
                 // If pattern valid -> search, otherwise -> clear results
                 if let Some(pattern) = parse_str_into_bytes(input, is_ascii) {
-                    self.search.results = search_bmh(self.ih.iter(), &pattern);
+                    self.search.results = search_bmh(self.ih.bytes(), &pattern);
                     self.search.length = pattern.len();
                 } else {
                     self.search.results.clear();
@@ -155,7 +154,7 @@ impl HexSession {
 )]
 /// Boyer–Moore–Horspool algorithm for `BTreeMap<usize, u8>`.
 /// Returns the starting addresses of all matches.
-fn search_bmh(map_iter: btree_map::Iter<usize, u8>, pattern: &[u8]) -> Vec<usize> {
+fn search_bmh(map_iter: impl Iterator<Item = (usize, u8)>, pattern: &[u8]) -> Vec<usize> {
     let m = pattern.len();
     if m == 0 || m > u8::MAX as usize {
         return vec![];
@@ -163,7 +162,7 @@ fn search_bmh(map_iter: btree_map::Iter<usize, u8>, pattern: &[u8]) -> Vec<usize
 
     // Consume the iterator once into an indexable representation.
     // This does not clone the BTreeMap, only copies (usize, u8) pairs.
-    let haystack: Vec<(usize, u8)> = map_iter.map(|(&addr, &byte)| (addr, byte)).collect();
+    let haystack: Vec<(usize, u8)> = map_iter.collect();
 
     // Check if length of address is less than the pattern
     let n = haystack.len();

@@ -62,7 +62,7 @@ impl HexSession {
                     // Update the bytes in the map. If the byte is actually changed -
                     // insert its address into Vec that tracks modified bytes.
                     for addr in s..=e {
-                        let prev_value = self.ih.get_byte(addr);
+                        let prev_value = self.ih.read_byte(addr);
                         if self.ih.update_byte(addr, value).ok() == Some(())
                             && let Some(prev) = prev_value
                             && value != prev

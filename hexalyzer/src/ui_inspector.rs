@@ -84,7 +84,7 @@ impl HexSession {
 
                 let mut bytes: Vec<u8> = Vec::new();
                 for addr in min..=max {
-                    if let Some(b) = self.ih.get_byte(addr) {
+                    if let Some(b) = self.ih.read_byte(addr) {
                         bytes.push(b);
                     }
                 }

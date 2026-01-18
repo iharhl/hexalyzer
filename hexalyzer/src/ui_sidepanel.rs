@@ -14,9 +14,8 @@ impl HexViewerApp {
                 // to construct the UI.
                 // TODO: better way than using dummy?
                 let mut dummy_session = HexSession::default();
-                let curr_session: &mut HexSession = self
-                    .get_curr_session_mut()
-                    .map_or_else(|| &mut dummy_session, |s| s);
+                let curr_session: &mut HexSession =
+                    self.get_curr_session_mut().unwrap_or(&mut dummy_session);
 
                 // FILE INFORMATION
                 egui::CollapsingHeader::new("File Information")

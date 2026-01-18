@@ -116,7 +116,7 @@ impl HexSession {
                 ui.spacing_mut().item_spacing.x = 0.0;
 
                 // Determine is the current byte selected
-                let byte = self.ih.get_byte(addr);
+                let byte = self.ih.read_byte(addr);
                 let is_selected = byte.is_some() && self.selection.is_addr_within_range(addr);
 
                 // Change color of every other byte for better readability
@@ -176,7 +176,7 @@ impl HexSession {
                 ui.spacing_mut().item_spacing.x = 1.0;
 
                 // Determine display char
-                let byte = self.ih.get_byte(addr);
+                let byte = self.ih.read_byte(addr);
                 let ch = byte.map_or(' ', |b| if b.is_ascii_graphic() { b as char } else { '.' });
 
                 // Determine is char selected

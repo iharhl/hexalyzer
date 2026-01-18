@@ -7,3 +7,14 @@ license.workspace = true
 [lib]
 name = "intelhexlib"
 path = "src/lib.rs"
+
+[dev-dependencies]
+criterion = { version = "0.8.1", features = ["html_reports"] }
+
+[features]
+benchmarking = []
+
+[[bench]]
+name = "benchmark"
+harness = false
+path = "benches/benchmark.rs"
