@@ -2,20 +2,25 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use intelhexlib::IntelHex;
 
 #[allow(clippy::expect_used)]
-fn bench_parsing(c: &mut Criterion) {
+fn bench_intelhex_parsing(c: &mut Criterion) {
     let input_path = "../build/random_data_1MB.hex";
 
-    c.bench_function("parse", |b| {
-        let bytes = std::fs::read(input_path).expect("Failed to read IntelHex file");
+    // IntelHex Parsing
+    c.bench_function("intelhex_parse_1mb", |b| {
+        let hex_bytes = std::fs::read(input_path).expect("Failed to read IntelHex file");
 
         b.iter(|| {
+            #[cfg(feature = "benchmarking")]
             let mut ih = IntelHex::new();
-            ih.parse(&bytes).expect("Failed to parse IntelHex file");
-            std::hint::black_box(ih)
+            IntelHex::bench_priv_parse(
+                std::hint::black_box(&mut ih),
+                std::hint::black_box(&hex_bytes),
+            );
+            std::hint::black_box(&ih);
         });
     });
 
-    c.bench_function("load_hex", |b| {
+    c.bench_function("intelhex_load_hex", |b| {
         b.iter(|| {
             let mut ih = IntelHex::new();
             ih.load_hex(std::hint::black_box(&input_path))
@@ -24,7 +29,7 @@ fn bench_parsing(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("load_bin", |b| {
+    c.bench_function("intelhex_load_bin", |b| {
         b.iter(|| {
             let mut ih = IntelHex::new();
             ih.load_bin(std::hint::black_box("tests/fixtures/ih_valid_1.bin"), 0xF0)
@@ -35,8 +40,8 @@ fn bench_parsing(c: &mut Criterion) {
 }
 
 criterion_group!(
-    name = benches;
+    name = intelhexlib_benches;
     config = Criterion::default().sample_size(20);
-    targets = bench_parsing
+    targets = bench_intelhex_parsing
 );
-criterion_main!(benches);
+criterion_main!(intelhexlib_benches);

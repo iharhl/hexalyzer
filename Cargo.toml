@@ -3,7 +3,7 @@ members = [
     "intelhexlib",
     "hexalyzer",
 ]
-resolver = "3"
+resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
@@ -16,4 +16,9 @@ repository = "https://github.com/iharhl/hexalyzer"
 [workspace.dependencies]
 intelhexlib = { path = "intelhexlib" }
 eframe = "0.33.2"
-rfd = "0.16.0"
+rfd = "0.17.2"
+
+[profile.bench]
+inherits = "release"
+lto = true
+codegen-units = 1

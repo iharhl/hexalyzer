@@ -1,3 +1,6 @@
-# Run benchmarks for some functions in `intelhexlib`.
-# Check `benches/` folder for more details.
-cargo bench --bench benchmark -p intelhexlib
+#!/bin/bash
+
+echo "Running all benchmarks..."
+
+# Run intelhexlib benches
+cargo bench -p intelhexlib --bench benchmark --features benchmarking

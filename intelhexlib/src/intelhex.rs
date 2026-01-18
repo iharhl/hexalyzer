@@ -104,7 +104,7 @@ impl IntelHex {
     /// - Returns an error if the record is corrupted
     /// - Returns an error if there is an issue during filling the internal buffer
     ///
-    pub fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
+    fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
         let mut count: usize = 0;
 
         // Iterate over lines of records
@@ -1224,5 +1224,14 @@ mod tests {
                 IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
             ))
         );
+    }
+}
+
+// =====================  BENCH ACCESS FOR PRIVATE FUNCTIONS  =====================
+
+impl IntelHex {
+    #[cfg(feature = "benchmarking")]
+    pub fn bench_priv_parse(ih: &mut Self, raw_bytes: &[u8]) {
+        let _ = ih.parse(raw_bytes);
     }
 }
