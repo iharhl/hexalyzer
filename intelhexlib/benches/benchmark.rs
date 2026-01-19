@@ -53,6 +53,17 @@ fn bench_intelhex_parsing(c: &mut Criterion) {
             std::hint::black_box(ih);
         });
     });
+
+    c.bench_function("intelhex_search", |b| {
+        let ih = IntelHex::from_hex(hex_1mb).expect("Failed to load IntelHex file");
+        let pattern = vec![0xCC, 0x59, 0x6B];
+
+        b.iter(|| {
+            let addrs = ih.search_bytes(&pattern);
+            std::hint::black_box(&addrs);
+            std::hint::black_box(&ih);
+        });
+    });
 }
 
 criterion_group!(

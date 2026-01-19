@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
+rand = "0.9.2"
 
 [features]
 benchmarking = []
@@ -18,3 +19,6 @@ benchmarking = []
 name = "benchmark"
 harness = false
 path = "benches/benchmark.rs"
+
+[dependencies]
+regex = "1.12.2"

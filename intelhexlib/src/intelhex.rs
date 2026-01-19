@@ -8,6 +8,7 @@
 
 use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
+use crate::search::{SearchType, search};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::Write;
@@ -900,6 +901,49 @@ impl IntelHex {
             .collect();
 
         Ok(())
+    }
+
+    /// Window slide search for a byte array in the `IntelHex` data.
+    /// Returns start addresses of matches.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
+    /// let matches: Vec<usize> = ih.search_bytes(&[0x00, 0x00, 0x02]);
+    ///
+    /// assert_eq!(matches, vec![0x1]);
+    /// ```
+    #[must_use]
+    pub fn search_bytes(&self, pattern: &[u8]) -> Vec<usize> {
+        search(self.iter(), &SearchType::Hex(pattern.to_vec()))
+    }
+
+    /// Window slide search for an ASCII string in the `IntelHex` data.
+    /// Returns start addresses of matches.
+    ///
+    /// If `regex` flag is set to true, the pattern is interpreted as a regular expression.
+    /// Otherwise, it is interpreted as a literal string.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
+    /// let matches1: Vec<usize> = ih.search_ascii("Kf", false); // [0x4B, 0x66] in hex bytes
+    /// let matches2: Vec<usize> = ih.search_ascii(r"H\d{1}\w{1}", true); // H0Y in the hex file
+    ///
+    /// assert_eq!(matches1, vec![0x1C216]);
+    /// assert_eq!(matches2, vec![0x1C237]);
+    /// ```
+    #[must_use]
+    pub fn search_ascii(&self, pattern: &str, regex: bool) -> Vec<usize> {
+        if regex {
+            search(self.iter(), &SearchType::Regex(pattern.to_string()))
+        } else {
+            search(self.iter(), &SearchType::Ascii(pattern.to_string()))
+        }
     }
 }
 

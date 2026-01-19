@@ -2,11 +2,19 @@ use crate::app::HexSession;
 use eframe::egui;
 
 #[derive(Default, PartialEq, Clone)]
+enum SearchMode {
+    #[default]
+    Hex,
+    Ascii,
+    Regex,
+}
+
+#[derive(Default, PartialEq, Clone)]
 struct SearchState {
     /// User input
     input: String,
-    /// Is search text in ASCII representation
-    is_ascii: bool,
+    /// Search mode: byte / ASCII literals / ASCII regex
+    mode: SearchMode,
 }
 
 #[derive(Default)]
@@ -71,9 +79,17 @@ impl HexSession {
     pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui) {
         // RadioButtons to select between byte and ascii search
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.search.current.is_ascii, false, "hex");
+            ui.radio_value(&mut self.search.current.mode, SearchMode::Hex, "Hex")
+                .on_hover_text("Search for a byte pattern");
             ui.add_space(5.0);
-            ui.radio_value(&mut self.search.current.is_ascii, true, "ascii");
+            ui.radio_value(&mut self.search.current.mode, SearchMode::Ascii, "Ascii")
+                .on_hover_text("Search ASCII literals");
+            ui.add_space(5.0);
+            ui.radio_value(&mut self.search.current.mode, SearchMode::Regex, "Regex")
+                .on_hover_text(
+                    "Search ASCII with regex\n\
+                Highlights only the first byte of the match",
+                );
         });
 
         ui.add_space(3.0);
@@ -105,13 +121,40 @@ impl HexSession {
                 }
             } else {
                 let input = self.search.current.input.as_str();
-                let is_ascii = self.search.current.is_ascii;
 
-                // If pattern valid -> search, otherwise -> clear results
-                if let Some(pattern) = parse_str_into_bytes(input, is_ascii) {
-                    self.search.results = search_bmh(self.ih.bytes(), &pattern);
-                    self.search.length = pattern.len();
-                } else {
+                // Search if pattern is valid
+                let valid = match self.search.current.mode {
+                    SearchMode::Hex => {
+                        if let Some(pattern) = parse_str_into_bytes(input) {
+                            self.search.results = self.ih.search_bytes(&pattern);
+                            self.search.length = pattern.len();
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    SearchMode::Ascii => {
+                        if input.is_empty() {
+                            false
+                        } else {
+                            self.search.results = self.ih.search_ascii(input, false);
+                            self.search.length = input.len();
+                            true
+                        }
+                    }
+                    SearchMode::Regex => {
+                        if input.is_empty() {
+                            false
+                        } else {
+                            self.search.results = self.ih.search_ascii(input, true);
+                            self.search.length = 1; // highlight the first byte of the match
+                            true
+                        }
+                    }
+                };
+
+                // Clear the result if pattern is not valid
+                if !valid {
                     self.search.results.clear();
                 }
 
@@ -145,74 +188,12 @@ impl HexSession {
     }
 }
 
-// TODO: 1) add SIMD acceleration; 2) Replace with KMP search?
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-/// Boyer–Moore–Horspool algorithm for `BTreeMap<usize, u8>`.
-/// Returns the starting addresses of all matches.
-fn search_bmh(map_iter: impl Iterator<Item = (usize, u8)>, pattern: &[u8]) -> Vec<usize> {
-    let m = pattern.len();
-    if m == 0 || m > u8::MAX as usize {
-        return vec![];
-    }
-
-    // Consume the iterator once into an indexable representation.
-    // This does not clone the BTreeMap, only copies (usize, u8) pairs.
-    let haystack: Vec<(usize, u8)> = map_iter.collect();
-
-    // Check if length of address is less than the pattern
-    let n = haystack.len();
-    if n < m {
-        return vec![];
-    }
-
-    // Build bad match table
-    let mut bad_match = [m as u8; 256];
-    for i in 0..m - 1 {
-        bad_match[pattern[i] as usize] = (m - 1 - i) as u8;
-    }
-
-    // Prepare result collection
-    let mut results = Vec::new();
-
-    // Main BMH loop
-    let mut i = 0; // index into addrs[]
-    while i <= n - m {
-        // Compare pattern from right to left
-        let mut j = (m - 1) as isize;
-        while j >= 0 && haystack[i + j as usize].1 == pattern[j as usize] {
-            j -= 1;
-        }
-
-        if j < 0 {
-            // Match found
-            results.push(haystack[i].0);
-            i += 1; // advance minimally
-        } else {
-            // Mismatch -> skip using last byte of window
-            let last_byte = haystack[i + m - 1].1;
-            i += bad_match[last_byte as usize] as usize;
-        }
-    }
-
-    results
-}
-
-fn parse_str_into_bytes(s: &str, is_ascii_repr: bool) -> Option<Vec<u8>> {
-    if is_ascii_repr {
-        return Some(s.as_bytes().to_vec());
-    }
-
+fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
     if s.len().is_multiple_of(2) {
-        (0..s.len())
+        return (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-            .collect()
-    } else {
-        None
+            .collect();
     }
+    None
 }

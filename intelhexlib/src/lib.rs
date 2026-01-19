@@ -19,6 +19,7 @@
 mod error;
 mod intelhex;
 mod record;
+mod search;
 
 // Public APIs
 pub use error::{IntelHexError, IntelHexErrorKind};
