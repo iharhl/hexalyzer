@@ -4,9 +4,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
 
-// TODO: merge -> in + out + (base addr for bin 1) + (base addr for bin 2) + (fill gaps for bins)
-// TODO: dump (dumps content for provided addr range to terminal)
-
 #[derive(PartialEq, Eq)]
 enum FileType {
     Bin,
@@ -24,12 +21,15 @@ fn print_usage() {
     println!("  ihex convert <input> <output> [options]");
     println!("  ihex merge <output> <input1>[:addr] ... <inputN>[:addr]");
     println!("\nOptions:");
-    println!("  --address <val>     Base address for relocate or convert from .bin to .hex");
-    println!("  --gap-fill <val>    Byte to fill gaps when converting to .bin (default: 0xFF)");
+    println!("  --address <val>     Base address for relocate / convert from .bin to .hex");
+    println!(
+        "  --gap-fill <val>    Byte to fill gaps when converting / merging to .bin (default: 0xFF)"
+    );
     println!("\nExamples:");
     println!("  ihex info firmware.hex");
     println!("  ihex relocate firmware.hex firmware_shifted.hex --address 0x1000");
     println!("  ihex convert firmware.hex firmware.bin --gap-fill 0x00");
+    println!("  ihex merge final.hex firmware1.hex firmware2.bin:0xFF00");
 }
 
 fn main() {
@@ -61,59 +61,56 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             // Guard: Check args count
             let path_str = args.get(2).ok_or("Missing input file path")?;
 
-            // Guard: File must exist. Get absolute path.
-            let path =
+            // Guard: File must exist
+            let abs_path =
                 validate_exists(path_str).map_err(|_| format!("File not found: {path_str}"))?;
 
-            run_info(&path)
+            run_info(&abs_path)
         }
         "relocate" => {
-            // Guard: Check file paths arguments given
-            let in_str = args.get(2).ok_or("Missing 1st argument - input path")?;
-            let out_str = args.get(3).ok_or("Missing 2nd argument - output path")?;
+            // Guard: Check file path arguments given
+            let in_path_str = args.get(2).ok_or("Missing input path")?;
+            let out_path_str = args.get(3).ok_or("Missing output path")?;
 
             // Guard: Check input exists
-            let in_path = validate_exists(in_str)?;
-
-            // Guard: Check output is a hex path
-            let out_path = PathBuf::from(out_str);
-            if get_file_type(&out_path) != FileType::Hex {
-                return Err(format!(
-                    "Argument '{out_str}' must be an output path with a .hex extension"
-                )
-                .into());
-            }
+            let in_abs_path = validate_exists(in_path_str)?;
 
             // Guard: Check input is a hex path
-            if get_file_type(&in_path) != FileType::Hex {
+            if get_file_type(&in_abs_path) != FileType::Hex {
                 return Err("Relocation is only supported for HEX input files".into());
             }
 
-            let addr_str = get_flag_value(args, "--address");
+            // Guard: Check output is a hex path
+            let out_path = PathBuf::from(out_path_str);
+            if get_file_type(&out_path) != FileType::Hex {
+                return Err(format!("Argument '{out_path_str}' must be a HEX output path").into());
+            }
 
+            // Get relocation address
+            let addr_str = get_flag_value(args, "--address");
             let addr = if let Some(s) = addr_str {
                 parse_address(&s).ok_or_else(|| format!("Invalid address: {s}"))?
             } else {
-                return Err("Missing --address flag or value after it".into());
+                return Err("Missing `--address` flag or the value after it".into());
             };
 
-            run_relocate(&in_path, &out_path, addr)
+            run_relocate(&in_abs_path, &out_path, addr)
         }
         "convert" => {
             // Guard: Check file paths arguments given
-            let in_str = args.get(2).ok_or("Missing input path")?;
-            let out_str = args.get(3).ok_or("Missing output path")?;
+            let in_path_str = args.get(2).ok_or("Missing input path")?;
+            let out_path_str = args.get(3).ok_or("Missing output path")?;
 
             // Guard: Check input exists
-            let in_path = validate_exists(in_str)?;
+            let in_abs_path = validate_exists(in_path_str)?;
 
-            let out_path = PathBuf::from(out_str);
-            let in_file_type = get_file_type(&in_path);
+            let out_path = PathBuf::from(out_path_str);
+            let in_file_type = get_file_type(&in_abs_path);
             let out_file_type = get_file_type(&out_path);
 
             // Guard: Check files are of a supported type
             if in_file_type == FileType::Other || out_file_type == FileType::Other {
-                return Err("Input or Output file are of unsupported type".into());
+                return Err("Input or output files are of unsupported type".into());
             }
 
             // Guard: Check input files are of a diff type
@@ -122,30 +119,66 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             }
 
             let addr_str = get_flag_value(args, "--address");
-            let gapfill_str = get_flag_value(args, "--gap-fill");
+            let gap_fill_str = get_flag_value(args, "--gap-fill");
 
             // Guard: Check address is provided ONLY if converting FROM bin
             if addr_str.is_some() && in_file_type != FileType::Bin {
                 return Err(
-                    "Base address (--address) is only supported for BIN to HEX conversion".into(),
+                    "Base address `--address` is only supported for BIN to HEX conversion".into(),
                 );
             } else if addr_str.is_none() && in_file_type == FileType::Bin {
                 return Err(
-                    "Base address (--address) is required for BIN to HEX conversion".into(),
+                    "Base address `--address` is required for BIN to HEX conversion".into(),
                 );
             }
             let base_addr = addr_str.and_then(|s| parse_address(&s));
 
             // Guard: Handle optional gap fill ONLY if converting TO bin
-            if gapfill_str.is_some() && in_file_type != FileType::Hex {
+            if gap_fill_str.is_some() && in_file_type != FileType::Hex {
                 return Err(
-                    "Gap fill (--gap-fill) is only supported for HEX to BIN conversion".into(),
+                    "Gap fill `--gap-fill` is only supported for HEX to BIN conversion".into(),
                 );
             }
             let gap_fill =
-                u8::try_from(gapfill_str.and_then(|s| parse_address(&s)).unwrap_or(0xFF))?;
+                u8::try_from(gap_fill_str.and_then(|s| parse_address(&s)).unwrap_or(0xFF))?;
 
-            run_convert(&in_path, &out_path, base_addr, gap_fill)
+            run_convert(&in_abs_path, &out_path, base_addr, gap_fill)
+        }
+        "merge" => {
+            if args.len() < 5 {
+                return Err(
+                    "Usage: ihex merge <output> <input1>[:addr] ... <inputN>[:addr]".into(),
+                );
+            }
+
+            // Guard: Check output file path argument given
+            let out_path_str = args.get(2).ok_or("Missing output path")?;
+            let out_path = PathBuf::from(out_path_str);
+
+            // Collect input file paths and optional base addresses
+            let mut inputs: Vec<(PathBuf, Option<usize>)> = Vec::new();
+            for arg in &args[3..] {
+                if arg.starts_with("--") {
+                    break; // stop at flags
+                }
+
+                let parts: Vec<&str> = arg.split(':').collect();
+                let in_abs_path = validate_exists(parts[0])?;
+                let addr = if parts.len() > 1 {
+                    Some(
+                        parse_address(parts[1])
+                            .ok_or_else(|| format!("Invalid address: {}", parts[1]))?,
+                    )
+                } else {
+                    None
+                };
+                inputs.push((in_abs_path, addr));
+            }
+
+            let gap_fill = get_flag_value(args, "--gap-fill");
+            let gap_fill = u8::try_from(gap_fill.and_then(|s| parse_address(&s)).unwrap_or(0xFF))?;
+
+            run_merge(inputs, &out_path, gap_fill)
         }
         _ => {
             print_usage();
@@ -175,10 +208,10 @@ fn run_info(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     } else if get_file_type(path) == FileType::Bin {
         IntelHex::from_bin(path, 0x0)?
     } else {
-        return Err(format!("File type not supported: {}", path.to_string_lossy()).into());
+        return Err(format!("File type not supported: {}", path.display()).into());
     };
 
-    println!("File Path:   {}", path.to_string_lossy());
+    println!("File Path:   {}", path.display());
     println!("Data Size:   {} bytes", format_with_commas(ih.size));
     println!(
         "Range:       {} - {}",
@@ -205,12 +238,13 @@ fn run_convert(
         ih.write_hex(out_path)?;
     }
 
-    let abs_out_path = validate_exists(&out_path.to_string_lossy())?;
+    // Validate output file was written
+    let out_abs_path = validate_exists(&out_path.to_string_lossy())?;
 
     println!(
         "Converted {} -> {}",
-        in_path.to_string_lossy(),
-        abs_out_path.to_string_lossy()
+        in_path.display(),
+        out_abs_path.display()
     );
     Ok(())
 }
@@ -224,14 +258,63 @@ fn run_relocate(
     ih.relocate(new_addr)?;
     ih.write_hex(out_path)?;
 
+    // Validate output file was written
+    let out_abs_path = validate_exists(&out_path.to_string_lossy())?;
+
     println!(
         "Relocated {} to 0x{new_addr:X} -> {}",
-        in_path.to_string_lossy(),
-        out_path.to_string_lossy()
+        in_path.display(),
+        out_abs_path.display()
     );
     Ok(())
 }
 
+fn run_merge(
+    inputs: Vec<(PathBuf, Option<usize>)>,
+    out_path: &PathBuf,
+    gap_fill: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut master_ih = IntelHex::new();
+
+    for (path, addr) in inputs {
+        let ih = match get_file_type(&path) {
+            FileType::Bin => {
+                let base_addr = addr.ok_or_else(|| {
+                    format!("Base address required for binary file: {}", path.display())
+                })?;
+                IntelHex::from_bin(&path, base_addr)?
+            }
+            FileType::Hex => {
+                let mut ih = IntelHex::from_hex(&path)?;
+                if let Some(new_addr) = addr {
+                    ih.relocate(new_addr)?;
+                }
+                ih
+            }
+            FileType::Other => {
+                return Err(format!("Unsupported file type: {}", path.display()).into());
+            }
+        };
+
+        master_ih.merge(&ih); // todo: use safe or not safe merge?
+    }
+
+    if get_file_type(out_path) == FileType::Bin {
+        master_ih.write_bin(out_path, gap_fill)?;
+    } else {
+        master_ih.write_hex(out_path)?;
+    }
+
+    // Validate output file was written
+    let out_abs_path = validate_exists(&out_path.to_string_lossy())?;
+
+    println!("Successfully merged files into {}", out_abs_path.display());
+    Ok(())
+}
+
+// =============================== HELPER FUNCTIONS ===============================
+
+/// Parse a string as a hex address (with optional 0x prefix)
 fn parse_address(s: &str) -> Option<usize> {
     let s = s.trim();
 
@@ -244,9 +327,7 @@ fn parse_address(s: &str) -> Option<usize> {
     usize::from_str_radix(s, 16).ok()
 }
 
-// =============================== HELPER FUNCTIONS ===============================
-
-/// Checks if the file has a .hex extension (case-insensitive)
+/// Determine `FileType` based on the file's extension (case-insensitive)
 fn get_file_type(path: &Path) -> FileType {
     if path
         .extension()
@@ -262,7 +343,7 @@ fn get_file_type(path: &Path) -> FileType {
     FileType::Other
 }
 
-/// Validates that a path exists and is a file
+/// Validate that a path exists and is a file. Returns absolute path.
 fn validate_exists(path_str: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = PathBuf::from(path_str);
     if !path.exists() {
@@ -275,7 +356,7 @@ fn validate_exists(path_str: &str) -> Result<PathBuf, Box<dyn std::error::Error>
     Ok(std::fs::canonicalize(path)?)
 }
 
-/// Finds the value after a specific flag (e.g., "--gap-fill 0xFF")
+/// Find the value after a specific flag (e.g., "--gap-fill 0xFF")
 fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|arg| arg == flag)
