@@ -3,6 +3,7 @@ members = [
     "intelhexlib",
     "hexalyzer",
 ]
+default-members = ["hexalyzer"]
 resolver = "2"
 
 [workspace.package]

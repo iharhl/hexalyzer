@@ -16,12 +16,13 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct IntelHex {
-    /// Intel HEX file path
+    /// Absolute path to the loaded file
     pub filepath: PathBuf,
-    /// Intel HEX file size in bytes
+    /// Size of the payload (data bytes).
+    /// Does not represent the full size of the Intel HEX file.
     pub size: usize,
-    /// Start address of the Intel HEX file (stores full record as a byte slice)
-    pub start_addr: Option<[u8; 10]>,
+    /// Start address of the Intel HEX file (stores full record as raw bytes)
+    pub start_addr: Option<[u8; 18]>,
     /// Maximum payload size for data records
     max_payload_size: usize,
     /// Offset of the linear address segment
@@ -159,7 +160,7 @@ impl IntelHex {
                         };
 
                         // Take ownership of the data (not required)
-                        let mut current_data = record.data;
+                        let mut cur_data = record.data;
 
                         match (can_append, can_prepend) {
                             // BRIDGE: [prev][new][next] -> [prev_merged]
@@ -172,7 +173,7 @@ impl IntelHex {
                                 if let Some(prev_data) =
                                     self.buffer.get_mut(&prev_key.unwrap_or_default())
                                 {
-                                    prev_data.append(&mut current_data);
+                                    prev_data.append(&mut cur_data);
                                     prev_data.append(&mut next_data);
                                 }
                             }
@@ -183,7 +184,7 @@ impl IntelHex {
                                 if let Some(prev_data) =
                                     self.buffer.get_mut(&prev_key.unwrap_or_default())
                                 {
-                                    prev_data.append(&mut current_data);
+                                    prev_data.append(&mut cur_data);
                                 }
                             }
                             // PREPEND: [new][next]
@@ -192,12 +193,12 @@ impl IntelHex {
                                 let mut next_data =
                                     self.buffer.remove(&new_end_addr).unwrap_or_default();
                                 // Append 'next' data to the 'new' chunk and insert it into the buffer
-                                current_data.append(&mut next_data);
-                                self.buffer.insert(addr, current_data);
+                                cur_data.append(&mut next_data);
+                                self.buffer.insert(addr, cur_data);
                             }
                             // NEW: [new]
                             (false, false) => {
-                                self.buffer.insert(addr, current_data);
+                                self.buffer.insert(addr, cur_data);
                             }
                         }
                     }
@@ -216,11 +217,13 @@ impl IntelHex {
                             count + 1,
                         ));
                     }
+
                     // Directly store the record slice.
+                    // Line length is always 19 chars (9 bytes + ':').
                     // Error cases are not checked here as it was done during record parsing.
                     // TODO: split legacy and modern way of specifying start address?
-                    if line.len() == 10
-                        && let Ok(bytes) = line[1..=10].try_into()
+                    if line.len() == 19
+                        && let Ok(bytes) = line[1..19].try_into()
                     {
                         self.start_addr = Some(bytes);
                     }
@@ -379,21 +382,21 @@ impl IntelHex {
             writeln!(writer)?;
         }
 
-        let mut curr_high_addr = 0u16;
+        let mut cur_high_addr = 0u16;
 
-        for (&chunk_start_addr, data) in &self.buffer {
+        for (&chunk_start, data) in &self.buffer {
             let mut chunk_offset = 0;
 
             // Iterate over data chunk
             while chunk_offset < data.len() {
-                let addr = chunk_start_addr + chunk_offset;
+                let addr = chunk_start + chunk_offset;
 
                 // Split address into low and high
                 let high_addr = (addr >> 16) as u16;
                 let low_addr = (addr & 0xFFFF) as u16;
 
                 // If ELA segment changed -> emit ELA record
-                if curr_high_addr != high_addr {
+                if cur_high_addr != high_addr {
                     let msb = (high_addr >> 8) as u8;
                     let lsb = (high_addr & 0xFF) as u8;
 
@@ -401,7 +404,7 @@ impl IntelHex {
 
                     writeln!(writer, "{record}")?;
 
-                    curr_high_addr = high_addr;
+                    cur_high_addr = high_addr;
                 }
 
                 // Determine how many bytes can fit in this record
@@ -468,13 +471,13 @@ impl IntelHex {
         let mut writer = std::io::BufWriter::new(file);
 
         // Get the starting point
-        let mut current_addr = self.get_min_addr().unwrap_or(0);
+        let mut cur_addr = self.get_min_addr().unwrap_or(0);
 
         // Iterate over contiguous chunks of data
-        for (&chunk_start_addr, data) in &self.buffer {
+        for (&chunk_start, chunk_data) in &self.buffer {
             // Fill the gap between the last written byte and the start of this chunk
-            if chunk_start_addr > current_addr {
-                let gap_size = chunk_start_addr - current_addr;
+            if chunk_start > cur_addr {
+                let gap_size = chunk_start - cur_addr;
 
                 // Use a small buffer to write gaps. Limit the buffer to 4096 KB as it is the
                 // default / typical page size of most OS - more efficient + avoids large heap allocations.
@@ -489,10 +492,10 @@ impl IntelHex {
             }
 
             // Write the entire contiguous chunk at once
-            writer.write_all(data)?;
+            writer.write_all(chunk_data)?;
 
             // Advance the tracking address
-            current_addr = chunk_start_addr + data.len();
+            cur_addr = chunk_start + chunk_data.len();
         }
 
         writer.flush()?;
@@ -535,10 +538,11 @@ impl IntelHex {
     /// assert_eq!((first_key, first_byte), (0x00, 0xFA));
     /// ```
     pub fn bytes(&self) -> impl Iterator<Item = (usize, u8)> + '_ {
-        self.buffer.iter().flat_map(|(&start_addr, data)| {
-            data.iter()
+        self.buffer.iter().flat_map(|(&chunk_start, chunk_data)| {
+            chunk_data
+                .iter()
                 .enumerate()
-                .map(move |(offset, &byte)| (start_addr + offset, byte))
+                .map(move |(offset, &byte)| (chunk_start + offset, byte))
         })
     }
 
@@ -557,11 +561,14 @@ impl IntelHex {
     /// assert_eq!((first_key, first_byte), (0x00, 0xFA));
     /// ```
     pub fn into_bytes(self) -> impl Iterator<Item = (usize, u8)> {
-        self.buffer.into_iter().flat_map(|(start_addr, data)| {
-            data.into_iter()
-                .enumerate()
-                .map(move |(offset, byte)| (start_addr + offset, byte))
-        })
+        self.buffer
+            .into_iter()
+            .flat_map(|(chunk_start, chunk_data)| {
+                chunk_data
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(offset, byte)| (chunk_start + offset, byte))
+            })
     }
 
     /// Get the smallest address of the data.
@@ -577,7 +584,9 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn get_min_addr(&self) -> Option<usize> {
-        self.buffer.first_key_value().map(|(key, _)| *key)
+        self.buffer
+            .first_key_value()
+            .map(|(chunk_start, _)| *chunk_start)
     }
 
     /// Get the highest address of the data.
@@ -595,7 +604,7 @@ impl IntelHex {
     pub fn get_max_addr(&self) -> Option<usize> {
         self.buffer
             .last_key_value()
-            .map(|(key, data)| *key + data.len() - 1)
+            .map(|(chunk_start, chunk_data)| *chunk_start + chunk_data.len() - 1)
     }
 
     /// Read byte from `IntelHex` at the provided address.
@@ -611,10 +620,10 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn read_byte(&self, address: usize) -> Option<u8> {
-        if let Some((&start_addr, data)) = self.buffer.range(..=address).next_back()
-            && address < start_addr + data.len()
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=address).next_back()
+            && address < chunk_start + chunk_data.len()
         {
-            return Some(data[address - start_addr]);
+            return Some(chunk_data[address - chunk_start]);
         }
         None
     }
@@ -634,14 +643,14 @@ impl IntelHex {
     #[must_use]
     pub fn read_range(&self, start_addr: usize, len: usize) -> Option<Vec<u8>> {
         // Find the chunk that might contain the start_addr
-        if let Some((&chunk_start, data)) = self.buffer.range(..=start_addr).next_back() {
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=start_addr).next_back() {
             let end_addr = start_addr + len;
-            let chunk_end = chunk_start + data.len();
+            let chunk_end = chunk_start + chunk_data.len();
 
             // Check if the entire requested range is within this chunk
             if start_addr >= chunk_start && end_addr <= chunk_end {
                 let chunk_offset = start_addr - chunk_start;
-                return Some(data[chunk_offset..chunk_offset + len].to_vec());
+                return Some(chunk_data[chunk_offset..chunk_offset + len].to_vec());
             }
         }
 
@@ -665,29 +674,29 @@ impl IntelHex {
     pub fn read_range_safe(&self, start_addr: usize, len: usize) -> Vec<Option<u8>> {
         let mut result = Vec::with_capacity(len);
         let end_addr = start_addr + len;
-        let mut current_addr = start_addr;
+        let mut cur_addr = start_addr;
 
-        while current_addr < end_addr {
+        while cur_addr < end_addr {
             // Find the chunk that contains or precedes current_addr
-            if let Some((&chunk_start, data)) = self.buffer.range(..=current_addr).next_back() {
-                let chunk_end = chunk_start + data.len();
+            if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=cur_addr).next_back() {
+                let chunk_end = chunk_start + chunk_data.len();
 
                 // Case 1: current_addr is inside a chunk
-                if current_addr >= chunk_start && current_addr < chunk_end {
-                    let chunk_offset = current_addr - chunk_start;
+                if cur_addr >= chunk_start && cur_addr < chunk_end {
+                    let chunk_offset = cur_addr - chunk_start;
 
-                    let available_size = chunk_end - current_addr;
-                    let needed_size = end_addr - current_addr;
+                    let available_size = chunk_end - cur_addr;
+                    let needed_size = end_addr - cur_addr;
                     let len_used = std::cmp::min(available_size, needed_size);
 
                     // Extend with the actual data
                     result.extend(
-                        data[chunk_offset..chunk_offset + len_used]
+                        chunk_data[chunk_offset..chunk_offset + len_used]
                             .iter()
                             .map(|&b| Some(b)),
                     );
 
-                    current_addr += len_used;
+                    cur_addr += len_used;
                     continue;
                 }
             }
@@ -696,16 +705,16 @@ impl IntelHex {
             // Find where the next chunk starts (if any) and fill the gap.
             let next_chunk_start = self
                 .buffer
-                .range(current_addr..)
+                .range(cur_addr..)
                 .next()
                 .map_or(end_addr, |(&s, _)| s);
 
             let gap_end = std::cmp::min(next_chunk_start, end_addr);
-            let gap_len = gap_end - current_addr;
+            let gap_len = gap_end - cur_addr;
 
             // Fill with None for the duration of the gap
             result.extend(std::iter::repeat_n(None, gap_len));
-            current_addr = gap_end;
+            cur_addr = gap_end;
         }
 
         result
@@ -728,10 +737,10 @@ impl IntelHex {
     /// assert!(res.is_ok());
     /// ```
     pub fn update_byte(&mut self, address: usize, value: u8) -> Result<(), IntelHexError> {
-        if let Some((&start_addr, data)) = self.buffer.range_mut(..=address).next_back()
-            && address < start_addr + data.len()
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=address).next_back()
+            && address < chunk_start + chunk_data.len()
         {
-            data[address - start_addr] = value;
+            chunk_data[address - chunk_start] = value;
             return Ok(());
         }
 
@@ -803,15 +812,13 @@ impl IntelHex {
     pub fn update_range(&mut self, start_addr: usize, data: &[u8]) -> Result<(), IntelHexError> {
         let len = data.len();
 
-        if let Some((&chunk_start_addr, chunk_data)) =
-            self.buffer.range_mut(..=start_addr).next_back()
-        {
-            let chunk_end = chunk_start_addr + chunk_data.len();
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=start_addr).next_back() {
+            let chunk_end = chunk_start + chunk_data.len();
             let end_addr = start_addr + len;
 
             // Check the entire range fits within a single chunk
-            if start_addr >= chunk_start_addr && end_addr <= chunk_end {
-                let chunk_offset = start_addr - chunk_start_addr;
+            if start_addr >= chunk_start && end_addr <= chunk_end {
+                let chunk_offset = start_addr - chunk_start;
                 chunk_data[chunk_offset..chunk_offset + len].copy_from_slice(data);
                 return Ok(());
             }
@@ -901,6 +908,189 @@ impl IntelHex {
             .collect();
 
         Ok(())
+    }
+
+    /// Merge another `IntelHex` instance into this one.
+    ///
+    /// # Errors
+    /// Returns an error if any data chunks overlap.
+    /// Returns an error if both this and other `IntelHex` instance have start address record.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// // Hex files do not have overlapping data chunks
+    /// let mut ih1 = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
+    /// let mut ih2 = IntelHex::from_hex("tests/fixtures/ih_valid_3.hex").unwrap();
+    ///
+    /// let res = ih1.merge_safe(&ih2);
+    ///
+    /// assert!(result.is_ok());
+    /// ```
+    pub fn merge_safe(&mut self, other: &Self) -> Result<(), IntelHexError> {
+        for (&chunk_start, chunk_data) in &other.buffer {
+            let end_addr = chunk_start + chunk_data.len();
+
+            // Check possible overlap with the chunk on the left
+            if let Some((&left_start, left_data)) = self.buffer.range(..=chunk_start).next_back() {
+                let left_end = left_start + left_data.len();
+                if chunk_start < left_end {
+                    return Err(IntelHexError::UpdateError(
+                        IntelHexErrorKind::RecordAddressOverlap(chunk_start),
+                    ));
+                }
+            }
+
+            // Check possible overlap with the chunk on the right
+            if let Some((&right_start, _)) = self.buffer.range(chunk_start..).next()
+                && right_start < end_addr
+            {
+                return Err(IntelHexError::UpdateError(
+                    IntelHexErrorKind::RecordAddressOverlap(right_start),
+                ));
+            }
+
+            // Insert the chunk if no overlaps
+            self.buffer.insert(chunk_start, chunk_data.clone());
+            self.size += chunk_data.len();
+        }
+
+        // If both files have a start address, return an error
+        if self.start_addr.is_some() && other.start_addr.is_some() {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::DuplicateStartAddress,
+            ));
+        }
+
+        // Use the start address from the other file if we don't have one
+        if self.start_addr.is_none() {
+            self.start_addr = other.start_addr;
+        }
+
+        // Go through the buffer and merge adjacent chunks (if any)
+
+        if self.buffer.len() < 2 {
+            return Ok(());
+        }
+
+        let mut new_buf = BTreeMap::<usize, Vec<u8>>::new();
+        let mut iter = std::mem::take(&mut self.buffer).into_iter();
+
+        if let Some((mut cur_start, mut cur_data)) = iter.next() {
+            let mut cur_end = cur_start + cur_data.len();
+
+            for (start, mut data) in iter {
+                if start == cur_end {
+                    cur_end += data.len();
+                    cur_data.append(&mut data);
+                } else {
+                    new_buf.insert(cur_start, cur_data);
+                    cur_start = start;
+                    cur_data = data;
+                    cur_end = cur_start + cur_data.len();
+                }
+            }
+
+            new_buf.insert(cur_start, cur_data);
+        }
+
+        self.buffer = new_buf;
+
+        Ok(())
+    }
+
+    /// Merge another `IntelHex` instance into this one.
+    ///
+    /// Other `IntelHex` instance will overwrite any overlapping data and
+    /// start address record (if present).
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// // Hex files have overlapping data chunk
+    /// let mut ih1 = IntelHex::from_hex("tests/fixtures/ih_valid_2.hex").unwrap();
+    /// let mut ih2 = IntelHex::from_hex("tests/fixtures/ih_valid_3.hex").unwrap();
+    ///
+    /// ih1.merge(&ih2);
+    ///
+    /// // Check for byte that was in `ih2` and not `ih1`
+    /// assert_eq!(ih1.read_byte(0x100), Some(0x21));
+    /// ```
+    pub fn merge(&mut self, other: &Self) {
+        for (&chunk_start, chunk_data) in &other.buffer {
+            let mut new_start = chunk_start;
+            let mut new_data = chunk_data.clone();
+            let mut new_end = chunk_start + chunk_data.len();
+
+            // Merge overlapping / adjacent keys in a dynamic loop to ensure
+            // no contiguous chunks are split into separate vectors
+            loop {
+                // Find a chunk that overlaps or touches from the LEFT (prefix)
+                let left_neighbor = self
+                    .buffer
+                    .range(..=new_start)
+                    .next_back()
+                    .filter(|&(&s, d)| s + d.len() >= new_start)
+                    .map(|(&s, _)| s);
+
+                if let Some(key) = left_neighbor
+                    && let Some(cur_data) = self.buffer.remove(&key)
+                {
+                    let cur_end = key + cur_data.len();
+
+                    // Merge prefix
+                    let mut merged_data = cur_data[..new_start - key].to_vec();
+                    merged_data.append(&mut new_data);
+
+                    // Check if existing data also extended beyond the current end
+                    if cur_end > new_end {
+                        let mut suffix = cur_data[new_end - key..].to_vec();
+                        merged_data.append(&mut suffix);
+                    }
+
+                    new_data = merged_data;
+                    new_start = key;
+                    new_end = new_start + new_data.len();
+                    continue; // re-check with expanded range
+                }
+
+                // Find a chunk that starts WITHIN our range or touches the RIGHT (suffix)
+                let right_neighbor = self
+                    .buffer
+                    .range(new_start..=new_end)
+                    .next()
+                    .map(|(&s, _)| s);
+
+                if let Some(key) = right_neighbor
+                    && let Some(cur_data) = self.buffer.remove(&key)
+                {
+                    let cur_end = key + cur_data.len();
+
+                    // If the existing chunk extends beyond our current end, append its tail
+                    if cur_end > new_end {
+                        let mut suffix_data = cur_data[new_end - key..].to_vec();
+                        new_data.append(&mut suffix_data);
+                    }
+
+                    new_end = new_start + new_data.len();
+                    continue; // re-check with expanded range
+                }
+                break;
+            }
+
+            // Insert the contiguous chunk
+            self.buffer.insert(new_start, new_data);
+        }
+
+        // Update total size (recompute to be safe with overwrites)
+        self.size = self.buffer.values().map(Vec::len).sum();
+
+        // Overwrite start address if the other has it
+        if let Some(other_start_addr) = other.start_addr {
+            self.start_addr = Some(other_start_addr);
+        }
     }
 
     /// Window slide search for a byte array in the `IntelHex` data.
@@ -1326,6 +1516,166 @@ mod tests {
             res,
             Err(IntelHexError::UpdateError(
                 IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
+            ))
+        );
+    }
+
+    #[test]
+    fn test_merge_valid() {
+        // Arrange
+        let mut ih1 = IntelHex::new();
+        ih1.buffer.insert(0x00, vec![0x0, 0x0]);
+        ih1.buffer.insert(0x20, vec![0x0, 0x0]);
+        ih1.buffer.insert(0x24, vec![0x0, 0x0]);
+        ih1.size = 6;
+
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x10, vec![0x1, 0x1]);
+        ih2.buffer.insert(0x22, vec![0x1, 0x1]);
+        ih2.start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        // Act
+        ih1.merge(&ih2);
+
+        // Assert
+        assert_eq!(*ih1.buffer.get(&0x00).unwrap_or(&vec![]), vec![0x0, 0x0]);
+        assert_eq!(*ih1.buffer.get(&0x10).unwrap_or(&vec![]), vec![0x1, 0x1]);
+        assert_eq!(
+            *ih1.buffer.get(&0x20).unwrap_or(&vec![]),
+            vec![0x0, 0x0, 0x1, 0x1, 0x0, 0x0]
+        );
+        assert_eq!(ih1.start_addr, ih2.start_addr);
+        assert_eq!(ih1.size, 10);
+
+        // Arrange
+        let mut ih3 = IntelHex::new();
+        ih3.buffer.insert(0x04, vec![0x2]);
+        ih3.buffer.insert(0x12, vec![0x2]);
+        ih3.buffer.insert(0x24, vec![0x2, 0x2, 0x2]);
+        ih3.start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 48, 53, 49,
+        ]); // :040000051122334051
+
+        // Act
+        ih1.merge(&ih3);
+
+        // Assert
+        assert_eq!(*ih1.buffer.get(&0x00).unwrap_or(&vec![]), vec![0x0, 0x0]);
+        assert_eq!(*ih1.buffer.get(&0x04).unwrap_or(&vec![]), vec![0x2]);
+        assert_eq!(
+            *ih1.buffer.get(&0x10).unwrap_or(&vec![]),
+            vec![0x1, 0x1, 0x2]
+        );
+        assert_eq!(
+            *ih1.buffer.get(&0x20).unwrap_or(&vec![]),
+            vec![0x0, 0x0, 0x1, 0x1, 0x2, 0x2, 0x2]
+        );
+        assert_eq!(ih1.start_addr, ih3.start_addr);
+        assert_eq!(ih1.size, 13);
+    }
+
+    #[test]
+    fn test_merge_safe_valid() {
+        // Arrange
+        let mut ih1 = IntelHex::new();
+        ih1.buffer.insert(0x00, vec![0x0, 0x0]);
+        ih1.buffer.insert(0x20, vec![0x0, 0x0]);
+        ih1.buffer.insert(0x24, vec![0x0, 0x0]);
+        ih1.size = 6;
+
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x10, vec![0x1, 0x1]);
+        ih2.buffer.insert(0x22, vec![0x1, 0x1]);
+        ih2.start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(*ih1.buffer.get(&0x00).unwrap_or(&vec![]), vec![0x0, 0x0]);
+        assert_eq!(*ih1.buffer.get(&0x10).unwrap_or(&vec![]), vec![0x1, 0x1]);
+        assert_eq!(
+            *ih1.buffer.get(&0x20).unwrap_or(&vec![]),
+            vec![0x0, 0x0, 0x1, 0x1, 0x0, 0x0]
+        );
+        assert_eq!(ih1.start_addr, ih2.start_addr);
+        assert_eq!(ih1.size, 10);
+    }
+
+    #[test]
+    fn test_merge_safe_invalid() {
+        // Arrange
+        let mut ih1 = IntelHex::new();
+        ih1.buffer.insert(0x20, vec![0x0, 0x0, 0x0, 0x0]);
+        ih1.size = 4;
+        ih1.start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x1E, vec![0x1, 0x1, 0x1]); // overlap from left side
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::RecordAddressOverlap(0x20)
+            ))
+        );
+
+        // Arrange
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x22, vec![0x1]); // overlap within
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::RecordAddressOverlap(0x22)
+            ))
+        );
+
+        // Arrange
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x23, vec![0x1, 0x1, 0x1]); // overlap from right side
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::RecordAddressOverlap(0x23)
+            ))
+        );
+
+        // Arrange
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x80, vec![0x1, 0x1]); // no overlap
+        ih2.start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::DuplicateStartAddress,
             ))
         );
     }
