@@ -46,6 +46,8 @@ pub struct HexSession {
     pub jump_to: JumpTo,
     /// Last modified time of the file. Used to detect file changes.
     pub last_modified: std::time::SystemTime,
+    /// Scroll id that allows each tab to keep its own scroll position
+    pub scroll_id: usize,
 
     // -- Shared UI states
     /// Per-frame state of user inputs
@@ -85,6 +87,7 @@ impl Default for HexSession {
             search: Search::default(),
             jump_to: JumpTo::default(),
             last_modified: std::time::SystemTime::UNIX_EPOCH,
+            scroll_id: 0,
             events: Rc::new(RefCell::new(EventState::default())),
             error: Rc::new(RefCell::new(None)),
         }

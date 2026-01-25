@@ -99,12 +99,16 @@ impl HexViewerApp {
             }
         };
 
+        // Determine unique scroll widget id
+        let scroll_id = self.sessions.len() + 1;
+
         let mut new_session = HexSession {
             name: path.file_name().map_or_else(
                 || "Untitled".to_string(),
                 |n| n.to_string_lossy().into_owned(),
             ),
             last_modified,
+            scroll_id,
             events: self.events.clone(), // clone the pointer
             error: self.error.clone(),   // clone the pointer
             ..HexSession::default()
