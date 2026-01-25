@@ -18,6 +18,7 @@ pub mod colors {
     pub const GRAY_160: Color32 = Color32::from_gray(160);
     pub const GRAY_210: Color32 = Color32::from_gray(210);
     pub const SHADOW: Color32 = Color32::from_black_alpha(150);
+    pub const WARNING: Color32 = Color32::from_rgb(160, 160, 16);
 }
 
 #[derive(PartialEq, Eq)]
@@ -43,6 +44,8 @@ pub struct HexSession {
     pub search: Search,
     /// Handler for GUI feature to jump to selected address
     pub jump_to: JumpTo,
+    /// Last modified time of the file. Used to detect file changes.
+    pub last_modified: std::time::SystemTime,
 
     // -- Shared UI states
     /// Per-frame state of user inputs
@@ -81,6 +84,7 @@ impl Default for HexSession {
             selection: Selection::default(),
             search: Search::default(),
             jump_to: JumpTo::default(),
+            last_modified: std::time::SystemTime::UNIX_EPOCH,
             events: Rc::new(RefCell::new(EventState::default())),
             error: Rc::new(RefCell::new(None)),
         }
@@ -102,13 +106,6 @@ impl Default for HexViewerApp {
 }
 
 impl HexViewerApp {
-    // pub(crate) fn clear(&mut self) {
-    //     self.sessions = Vec::new();
-    //     self.popup = Popup::default();
-    //     *self.events.borrow_mut() = EventState::default();
-    //     *self.error.borrow_mut() = None;
-    // }
-
     /// Get the currently active session, if any
     pub(crate) fn get_curr_session(&self) -> Option<&HexSession> {
         self.active_index.and_then(|i| self.sessions.get(i))
@@ -119,16 +116,3 @@ impl HexViewerApp {
         self.active_index.and_then(|i| self.sessions.get_mut(i))
     }
 }
-
-// impl HexSession {
-//     pub(crate) fn clear(&mut self) {
-//         self.ih = IntelHex::default();
-//         self.addr = 0..=0;
-//         self.editor = ByteEdit::default();
-//         self.selection = Selection::default();
-//         self.search = Search::default();
-//         self.jump_to = JumpTo::default();
-//         *self.events.borrow_mut() = EventState::default();
-//         *self.error.borrow_mut() = None;
-//     }
-// }

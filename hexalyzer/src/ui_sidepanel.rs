@@ -1,6 +1,7 @@
-use crate::app::{HexSession, HexViewerApp};
+use crate::app::{colors, HexSession, HexViewerApp};
 use crate::ui_inspector::format_with_separators;
 use eframe::egui;
+use crate::loader::get_last_modified;
 
 impl HexViewerApp {
     /// Show the side panel with the file information, jump to address, search, and data inspector.
@@ -50,13 +51,33 @@ impl HexViewerApp {
                                 ui.with_layout(
                                     egui::Layout::left_to_right(egui::Align::LEFT),
                                     |ui| {
-                                        ui.label("File Size");
+                                        ui.label("Payload Size");
                                     },
                                 );
                                 let size = format_with_separators(curr_session.ih.size);
                                 ui.label(format!("{size} bytes"));
                                 ui.end_row();
                             });
+
+                        // Get the last modified time of the file.
+                        // If changed -> show warning.
+                        let last_modified = get_last_modified(&curr_session.ih.filepath).ok();
+                        if !filepath.is_empty()
+                            && let Some(t) = last_modified
+                            && t != std::time::SystemTime::UNIX_EPOCH
+                            && t != curr_session.last_modified
+                        {
+                            ui.add_space(3.0);
+                            ui.label(
+                                egui::RichText::new("File on disk has been modified!")
+                                    .color(colors::WARNING)
+                                    .size(12.0)
+                                    .strong()
+                            ).on_hover_text(
+                                "This file has been modified on disk since it was opened.\n\
+                                You can reload it manually by closing and loading the file again."
+                            );
+                        }
 
                         ui.add_space(5.0);
                     });

@@ -12,6 +12,12 @@ pub enum FileKind {
     Unknown,
 }
 
+/// Get the last modified time of the file
+pub fn get_last_modified(path: &PathBuf) -> std::io::Result<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .map(|meta| meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+}
+
 fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
     let mut f = File::open(path)?;
 
@@ -84,11 +90,21 @@ impl HexViewerApp {
             return;
         }
 
+        // Get the last modified time of the file
+        let last_modified = match get_last_modified(path) {
+            Ok(time) => time,
+            Err(err) => {
+                self.error.borrow_mut().replace(err.to_string());
+                return;
+            }
+        };
+
         let mut new_session = HexSession {
             name: path.file_name().map_or_else(
                 || "Untitled".to_string(),
                 |n| n.to_string_lossy().into_owned(),
             ),
+            last_modified,
             events: self.events.clone(), // clone the pointer
             error: self.error.clone(),   // clone the pointer
             ..HexSession::default()
