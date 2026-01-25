@@ -9,8 +9,8 @@ name = "intelhexlib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ihex"
-path = "bin/ihex.rs"
+name = "hexcli"
+path = "bin/hexcli.rs"
 required-features = ["cli"]
 
 [dev-dependencies]

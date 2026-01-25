@@ -80,9 +80,9 @@ Switch between displaying 16 or 32 bytes per row.
 Displays version information and credits for the Hexalyzer project.
 
 
-## IntelHexLib
+## Intel HEX Library
 
-The core of Hexalyzer is powered by a standalone Intel HEX parsing library. It is designed to
+The core of Hexalyzer is powered by a standalone Intel HEX parsing library `intelhexlib`. It is designed to
 handle memory-sparse firmware files using a BTreeMap buffer.
 
 ### Key Features
@@ -130,6 +130,38 @@ fn main() {
         }
     }
 }
+```
+
+### CLI
+
+A CLI tool `hexcli` is also available for parsing and editing Intel HEX files.
+
+Its functionality includes:
+- Getting info about a file.
+- Relocating the file to a new start address.
+- Converting a file to between BIN and HEX formats.
+- Merging multiple files into a single one (mixing BIN and HEX files is allowed).
+
+```shell
+ ----------------------------------------------------------------
+|  Intel HEX Utility  | v0.1.0 - Copyright (c) 2026 Ihar Hlukhau |
+ ----------------------------------------------------------------
+
+Usage:
+  hexcli info <input>
+  hexcli relocate <input> <output> [options]
+  hexcli convert <input> <output> [options]
+  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]
+
+Options:
+  --address <val>    Base address for relocate / convert from BIN to HEX
+  --gap-fill <val>   Byte to fill gaps when converting / merging to BIN (default: 0xFF)
+
+Examples:
+  hexcli info firmware.hex
+  hexcli relocate firmware.hex firmware_shifted.hex --address 0x1000
+  hexcli convert firmware.hex firmware.bin --gap-fill 0x00
+  hexcli merge final.hex firmware1.hex firmware2.bin:0xFF00
 ```
 
 

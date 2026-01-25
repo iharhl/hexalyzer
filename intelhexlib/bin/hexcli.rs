@@ -12,24 +12,26 @@ enum FileType {
 }
 
 fn print_usage() {
-    println!(" ------------------");
-    println!("| Intel HEX Utility |");
-    println!(" ------------------");
+    let version = env!("CARGO_PKG_VERSION");
+
+    println!(" ----------------------------------------------------------------");
+    println!("|  Intel HEX Utility  | v{version} - Copyright (c) 2026 Ihar Hlukhau |");
+    println!(" ----------------------------------------------------------------");
     println!("\nUsage:");
-    println!("  ihex info <input>");
-    println!("  ihex relocate <input> <output> [options]");
-    println!("  ihex convert <input> <output> [options]");
-    println!("  ihex merge <output> <input1>[:addr] ... <inputN>[:addr]");
+    println!("  hexcli info <input>");
+    println!("  hexcli relocate <input> <output> [options]");
+    println!("  hexcli convert <input> <output> [options]");
+    println!("  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]");
     println!("\nOptions:");
-    println!("  --address <val>     Base address for relocate / convert from .bin to .hex");
+    println!("  --address <val>    Base address for relocate / convert from BIN to HEX");
     println!(
-        "  --gap-fill <val>    Byte to fill gaps when converting / merging to .bin (default: 0xFF)"
+        "  --gap-fill <val>   Byte to fill gaps when converting / merging to BIN (default: 0xFF)"
     );
     println!("\nExamples:");
-    println!("  ihex info firmware.hex");
-    println!("  ihex relocate firmware.hex firmware_shifted.hex --address 0x1000");
-    println!("  ihex convert firmware.hex firmware.bin --gap-fill 0x00");
-    println!("  ihex merge final.hex firmware1.hex firmware2.bin:0xFF00");
+    println!("  hexcli info firmware.hex");
+    println!("  hexcli relocate firmware.hex firmware_shifted.hex --address 0x1000");
+    println!("  hexcli convert firmware.hex firmware.bin --gap-fill 0x00");
+    println!("  hexcli merge final.hex firmware1.hex firmware2.bin:0xFF00");
 }
 
 fn main() {
@@ -51,6 +53,7 @@ fn main() {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         "help" | "-h" | "--help" => {
@@ -83,15 +86,15 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             // Guard: Check output is a hex path
             let out_path = PathBuf::from(out_path_str);
             if get_file_type(&out_path) != FileType::Hex {
-                return Err(format!("Argument '{out_path_str}' must be a HEX output path").into());
+                return Err(format!("Argument '{out_path_str}' is not a HEX output path").into());
             }
 
             // Get relocation address
             let addr_str = get_flag_value(args, "--address");
-            let addr = if let Some(s) = addr_str {
-                parse_address(&s).ok_or_else(|| format!("Invalid address: {s}"))?
+            let addr = if let Some(addr) = addr_str {
+                parse_hex_str(&addr).map_err(|_e| format!("Invalid address: {addr}"))?
             } else {
-                return Err("Missing `--address` flag or the value after it".into());
+                return Err("Missing '--address' flag or the value after it".into());
             };
 
             run_relocate(&in_abs_path, &out_path, addr)
@@ -124,30 +127,41 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             // Guard: Check address is provided ONLY if converting FROM bin
             if addr_str.is_some() && in_file_type != FileType::Bin {
                 return Err(
-                    "Base address `--address` is only supported for BIN to HEX conversion".into(),
+                    "Base address '--address' is only supported for BIN to HEX conversion".into(),
                 );
             } else if addr_str.is_none() && in_file_type == FileType::Bin {
                 return Err(
-                    "Base address `--address` is required for BIN to HEX conversion".into(),
+                    "Base address '--address' is required for BIN to HEX conversion".into(),
                 );
             }
-            let base_addr = addr_str.and_then(|s| parse_address(&s));
+
+            let base_addr = if let Some(addr) = addr_str {
+                Some(parse_hex_str(&addr).map_err(|_e| format!("Invalid address: {addr}"))?)
+            } else {
+                None
+            };
 
             // Guard: Handle optional gap fill ONLY if converting TO bin
             if gap_fill_str.is_some() && in_file_type != FileType::Hex {
                 return Err(
-                    "Gap fill `--gap-fill` is only supported for HEX to BIN conversion".into(),
+                    "Gap fill '--gap-fill' is only supported for HEX to BIN conversion".into(),
                 );
             }
-            let gap_fill =
-                u8::try_from(gap_fill_str.and_then(|s| parse_address(&s)).unwrap_or(0xFF))?;
+            let gap_fill = if let Some(gap_fill) = gap_fill_str {
+                u8::try_from(
+                    parse_hex_str(&gap_fill)
+                        .map_err(|_e| format!("Invalid gap fill: {gap_fill}"))?,
+                )?
+            } else {
+                0xFF
+            };
 
             run_convert(&in_abs_path, &out_path, base_addr, gap_fill)
         }
         "merge" => {
             if args.len() < 5 {
                 return Err(
-                    "Usage: ihex merge <output> <input1>[:addr] ... <inputN>[:addr]".into(),
+                    "Usage: hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]".into(),
                 );
             }
 
@@ -166,8 +180,8 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                 let in_abs_path = validate_exists(parts[0])?;
                 let addr = if parts.len() > 1 {
                     Some(
-                        parse_address(parts[1])
-                            .ok_or_else(|| format!("Invalid address: {}", parts[1]))?,
+                        parse_hex_str(parts[1])
+                            .map_err(|_e| format!("Invalid address: {}", parts[1]))?,
                     )
                 } else {
                     None
@@ -175,8 +189,15 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                 inputs.push((in_abs_path, addr));
             }
 
-            let gap_fill = get_flag_value(args, "--gap-fill");
-            let gap_fill = u8::try_from(gap_fill.and_then(|s| parse_address(&s)).unwrap_or(0xFF))?;
+            let gap_fill_str = get_flag_value(args, "--gap-fill");
+            let gap_fill = if let Some(gap_fill) = gap_fill_str {
+                u8::try_from(
+                    parse_hex_str(&gap_fill)
+                        .map_err(|_e| format!("Invalid gap fill: {gap_fill}"))?,
+                )?
+            } else {
+                0xFF
+            };
 
             run_merge(inputs, &out_path, gap_fill)
         }
@@ -314,17 +335,17 @@ fn run_merge(
 
 // =============================== HELPER FUNCTIONS ===============================
 
-/// Parse a string as a hex address (with optional 0x prefix)
-fn parse_address(s: &str) -> Option<usize> {
+/// Parse a string as a hex number (with optional 0x prefix)
+fn parse_hex_str(s: &str) -> Result<usize, std::num::ParseIntError> {
     let s = s.trim();
 
     // Handle explicit 0x prefix
     if let Some(hex_str) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        return usize::from_str_radix(hex_str, 16).ok();
+        return usize::from_str_radix(hex_str, 16);
     }
 
     // Parse as hex without prefix
-    usize::from_str_radix(s, 16).ok()
+    usize::from_str_radix(s, 16)
 }
 
 /// Determine `FileType` based on the file's extension (case-insensitive)
