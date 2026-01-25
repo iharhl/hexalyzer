@@ -38,7 +38,7 @@ impl HexSession {
         ui: &egui::Ui,
         bytes_per_row: usize,
     ) -> egui::ScrollArea {
-        let mut scroll_area = egui::ScrollArea::vertical();
+        let mut scroll_area = egui::ScrollArea::vertical().id_salt(self.scroll_id);
         if let Some(addr) = self.search.addr {
             let offset = self.get_scroll_offset(ui, addr, bytes_per_row);
             scroll_area = scroll_area.vertical_scroll_offset(offset);
