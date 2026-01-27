@@ -1,5 +1,4 @@
 #![cfg(feature = "cli")]
-
 #![allow(clippy::expect_used)]
 #![allow(clippy::panic)]
 
@@ -588,7 +587,7 @@ fn test_ihex_merge_invalid() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Usage: ihex merge <output> <input1>[:addr]"),
+        stderr.contains("Usage: hexcli merge <output> <input1>[:addr]"),
         "stderr did not contain expected error text:\n{stderr}"
     );
 

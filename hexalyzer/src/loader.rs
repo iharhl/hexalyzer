@@ -14,8 +14,7 @@ pub enum FileKind {
 
 /// Get the last modified time of the file
 pub fn get_last_modified(path: &PathBuf) -> std::io::Result<std::time::SystemTime> {
-    std::fs::metadata(path)
-        .map(|meta| meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+    std::fs::metadata(path).map(|meta| meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
 }
 
 fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {

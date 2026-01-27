@@ -1,7 +1,7 @@
-use crate::app::{colors, HexSession, HexViewerApp};
+use crate::app::{HexSession, HexViewerApp, colors};
+use crate::loader::get_last_modified;
 use crate::ui_inspector::format_with_separators;
 use eframe::egui;
-use crate::loader::get_last_modified;
 
 impl HexViewerApp {
     /// Show the side panel with the file information, jump to address, search, and data inspector.
@@ -72,10 +72,11 @@ impl HexViewerApp {
                                 egui::RichText::new("File on disk has been modified!")
                                     .color(colors::WARNING)
                                     .size(12.0)
-                                    .strong()
-                            ).on_hover_text(
+                                    .strong(),
+                            )
+                            .on_hover_text(
                                 "This file has been modified on disk since it was opened.\n\
-                                You can reload it manually by closing and loading the file again."
+                                You can reload it manually by closing and loading the file again.",
                             );
                         }
 
