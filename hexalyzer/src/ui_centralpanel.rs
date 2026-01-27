@@ -69,9 +69,23 @@ impl HexSession {
             self.editor.clear();
         }
 
+        // Start and end addresses of the whole visible area
+        let start = self.addr.start() + row_range.start * bytes_per_row;
+        let end = self.addr.start() + row_range.end * bytes_per_row + bytes_per_row;
+
+        // Get bytes from the buffer for the whole area at once
+        let bytes = self.ih.read_range_safe(start, end - start);
+
         // Draw rows
-        for row in row_range {
-            self.draw_row(ui, row, pointer_down, pointer_hover, bytes_per_row);
+        for (i, row) in row_range.enumerate() {
+            self.draw_row(
+                ui,
+                row,
+                pointer_down,
+                pointer_hover,
+                bytes_per_row,
+                &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
+            );
         }
 
         // Handle arrow key events
@@ -98,12 +112,13 @@ impl HexSession {
         pointer_down: bool,
         pointer_hover: Option<egui::Pos2>,
         bytes_per_row: usize,
+        bytes: &[Option<u8>],
     ) {
-        ui.horizontal(|ui| {
-            // Start and end addresses
-            let start = self.addr.start() + row * bytes_per_row;
-            let end = start + bytes_per_row;
+        // Start and end addresses of the current row
+        let start = self.addr.start() + row * bytes_per_row;
+        let end = start + bytes_per_row;
 
+        ui.horizontal(|ui| {
             // Display address (fixed width, monospaced)
             ui.monospace(format!("{start:08X}"));
 
@@ -111,12 +126,12 @@ impl HexSession {
             ui.add_space(16.0);
 
             // Hex bytes representation row
-            for addr in start..end {
+            for (i, addr) in (start..end).enumerate() {
                 // Remove spacing between buttons
                 ui.spacing_mut().item_spacing.x = 0.0;
 
                 // Determine is the current byte selected
-                let byte = self.ih.read_byte(addr);
+                let byte = bytes[i];
                 let is_selected = byte.is_some() && self.selection.is_addr_within_range(addr);
 
                 // Change color of every other byte for better readability
@@ -171,12 +186,12 @@ impl HexSession {
             ui.add_space(16.0);
 
             // ASCII representation row
-            for addr in start..end {
+            for (i, addr) in (start..end).enumerate() {
                 // Spacing between ascii labels
                 ui.spacing_mut().item_spacing.x = 1.0;
 
                 // Determine display char
-                let byte = self.ih.read_byte(addr);
+                let byte = bytes[i];
                 let ch = byte.map_or(' ', |b| if b.is_ascii_graphic() { b as char } else { '.' });
 
                 // Determine is char selected
