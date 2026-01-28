@@ -61,7 +61,7 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
                 }
 
                 // Store arrow keys release directly
-                if matches!(*key, egui::Key::ArrowLeft | egui::Key::ArrowRight) {
+                if matches!(*key, egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::ArrowUp | egui::Key::ArrowDown) {
                     state.arrow_key_released = Some(*key);
                 }
 

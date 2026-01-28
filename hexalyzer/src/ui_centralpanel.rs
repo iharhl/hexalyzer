@@ -15,23 +15,19 @@ impl HexSession {
             // Get row height in pixels (depends on font size)
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
 
-            // Create scroll area. Scroll if search or addr jump is triggered.
-            let scroll_area = self.create_scroll_area(ui, bytes_per_row);
-
-            scroll_area
-                .wheel_scroll_multiplier(egui::Vec2 { x: 1.0, y: 0.4 }) // slow vertical scroll
-                .scroll_source(egui::containers::scroll_area::ScrollSource {
-                    mouse_wheel: true,
-                    scroll_bar: true,
-                    drag: false,
-                })
-                .auto_shrink([false; 2])
-                .show_rows(ui, row_height, total_rows, |ui, row_range| {
+            // Create a scroll area. Scroll if search or addr jump is triggered.
+            self.create_step_scroll(bytes_per_row).show_rows(
+                ui,
+                row_height,
+                total_rows,
+                |ui, row_range| {
                     // Collect input events once per frame and store in the app state
                     *self.events.borrow_mut() = collect_ui_events(ui);
+
                     // Draw the main canvas with hex content
                     self.draw_main_canvas(ui, row_range, bytes_per_row);
-                })
+                },
+            );
         });
 
         // Reset the state of search and jump after drawing the central panel
@@ -98,6 +94,14 @@ impl HexSession {
                 }
                 Some(egui::Key::ArrowRight) => {
                     r[0] = r[0].saturating_add(1);
+                    r[1] = r[0];
+                }
+                Some(egui::Key::ArrowUp) => {
+                    r[0] = r[0].saturating_sub(bytes_per_row);
+                    r[1] = r[0];
+                }
+                Some(egui::Key::ArrowDown) => {
+                    r[0] = r[0].saturating_add(bytes_per_row);
                     r[1] = r[0];
                 }
                 _ => {}

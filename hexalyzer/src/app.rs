@@ -28,7 +28,7 @@ pub enum Endianness {
 }
 
 pub struct HexSession {
-    /// Name of the session (aka filename)
+    /// Name of the session (same as filename)
     pub name: String,
     /// `IntelHex` object returned by `intelhexlib`
     pub ih: IntelHex,
@@ -52,7 +52,8 @@ pub struct HexSession {
     // -- Shared UI states
     /// Per-frame state of user inputs
     pub events: Rc<RefCell<EventState>>,
-    /// Errors during parsing, editing, or writing `IntelHex` file
+    /// Errors originating from user interaction with the session.
+    /// Currently, no such errors are defined, reserved for future use.
     pub error: Rc<RefCell<Option<String>>>,
 }
 
