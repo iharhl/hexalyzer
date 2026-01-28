@@ -24,7 +24,7 @@ impl StepScrollArea {
     pub fn show_rows<R>(
         self,
         ui: &mut egui::Ui,
-        row_height: f32,
+        font_height: f32,
         total_rows: usize,
         add_contents: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>) -> R,
     ) -> R {
@@ -44,8 +44,10 @@ impl StepScrollArea {
             top_row = top_row.saturating_add_signed(row_delta);
         }
 
-        // Make view boundary
-        let visible_rows = (rect.height() / row_height).floor() as usize;
+        // Make view boundary.
+        // Visible rows are not fully accurate. Had to add margin for a more consistent display.
+        let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
+        let visible_rows = (rect.height() / full_row_size).floor() as usize;
         let max_top_row = total_rows.saturating_sub(visible_rows);
         top_row = top_row.min(max_top_row);
 

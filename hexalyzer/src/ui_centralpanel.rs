@@ -13,12 +13,12 @@ impl HexSession {
             let total_rows = (self.addr.end() - self.addr.start()).div_ceil(bytes_per_row);
 
             // Get row height in pixels (depends on font size)
-            let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
 
             // Create a scroll area. Scroll if search or addr jump is triggered.
             self.create_step_scroll(bytes_per_row).show_rows(
                 ui,
-                row_height,
+                font_height,
                 total_rows,
                 |ui, row_range| {
                     // Collect input events once per frame and store in the app state
