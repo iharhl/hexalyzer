@@ -83,6 +83,18 @@ impl HexViewerApp {
                             self.popup.ptype = Some(PopupType::ReAddr);
                         }
 
+                        // MERGE BUTTON
+                        if ui.button("Merge...").clicked()
+                            && let Some(curr_session) = self.get_curr_session()
+                            && curr_session.ih.size != 0
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_title("Merge with File")
+                                .pick_file()
+                        {
+                            self.popup.active = true;
+                            self.popup.ptype = Some(PopupType::Merge(path));
+                        }
+
                         // RESTORE BUTTON
                         if ui.button("Restore byte changes").clicked()
                             && let Some(curr_session) = self.get_curr_session_mut()

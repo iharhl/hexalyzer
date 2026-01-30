@@ -135,4 +135,62 @@ impl HexViewerApp {
             self.active_index = Some(0);
         }
     }
+
+    pub(crate) fn merge_file_into_curr_session(
+        &mut self,
+        path: &PathBuf,
+        addr1: Option<usize>,
+        addr2: Option<usize>,
+    ) {
+        if let Some(cur_session) = self.get_curr_session_mut() {
+            let file_type = match detect_file_kind(path) {
+                Ok(kind) => kind,
+                Err(err) => {
+                    self.error.borrow_mut().replace(err.to_string());
+                    return;
+                }
+            };
+
+            // Relocate the current file to a new start address
+            if let Some(new_start_addr) = addr1 {
+                let res = cur_session.ih.relocate(new_start_addr);
+
+                if let Err(msg) = res {
+                    self.error.borrow_mut().replace(msg.to_string());
+                    return;
+                }
+            }
+
+            // Load the selected file into the new IntelHex instance
+            let mut new_ih = IntelHex::new();
+            let res = match file_type {
+                FileKind::Hex => new_ih.load_hex(path),
+                FileKind::Bin => new_ih.load_bin(path, 0),
+                FileKind::Elf => Err("ELF files are not yet supported".into()),
+                FileKind::Unknown => Err("Could not determine the file type".into()),
+            };
+
+            if let Err(msg) = res {
+                self.error.borrow_mut().replace(msg.to_string());
+                return;
+            }
+
+            // Relocate the selected file to a new start address
+            if let Some(new_start_addr) = addr2 {
+                let res = new_ih.relocate(new_start_addr);
+
+                if let Err(msg) = res {
+                    self.error.borrow_mut().replace(msg.to_string());
+                    return;
+                }
+            }
+
+            // Merge the two IntelHex instances
+            cur_session.ih.merge(&new_ih);
+        } else {
+            self.error
+                .borrow_mut()
+                .replace("Could not get current hex session".to_string());
+        }
+    }
 }

@@ -69,7 +69,9 @@ tools:
 #### Edit
 
 1. `Relocate...`: Relocate the current file to a new start address.
-2. `Restore byte changes`: Discard all changes made to the current file.
+2. `Merge...`: Merge selected file into the current one. Before merging, new start
+addresses can be specified for both files.
+3. `Restore byte changes`: Discard all changes made to the current file.
 
 #### View
 
@@ -93,7 +95,7 @@ contiguous chunks. The key represents the starting address, and the `Vec<u8>` co
 payload which ensures fast lookups.
 
 - **Data editing**: Allows updating single bytes, byte ranges, supports relocation to a new
-start address, etc.
+start address, merging, etc.
 
 - **Flexible API**: Allows for easy parsing and update of hex data as well as straightforward
 integration into other projects.
