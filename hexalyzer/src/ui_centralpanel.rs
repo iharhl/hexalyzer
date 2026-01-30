@@ -1,6 +1,6 @@
 use crate::app::{HexSession, colors};
-use crate::events::collect_ui_events;
-use crate::ui_button::light_mono_button;
+use crate::events;
+use crate::ui_button;
 use eframe::egui;
 use std::ops::Range;
 
@@ -10,7 +10,15 @@ impl HexSession {
     /// to define the central region and implements a scrollable hex view with UI event handling.
     pub(crate) fn show_central_panel(&mut self, ctx: &egui::Context, bytes_per_row: usize) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let total_rows = (self.addr.end() - self.addr.start()).div_ceil(bytes_per_row);
+            // Align to 0x10 so every printed row address ends with '0'
+            const ROW_ADDR_ALIGN: usize = 0x10;
+            let align_down = |addr: usize| addr & !(ROW_ADDR_ALIGN - 1);
+            let align_up = |addr: usize| (addr + (ROW_ADDR_ALIGN - 1)) & !(ROW_ADDR_ALIGN - 1);
+
+            // Get start and end addresses of the visible area. Find total rows to display.
+            let display_start = align_down(*self.addr.start());
+            let display_end = align_up(*self.addr.end() + 1);
+            let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
             // Get row height in pixels (depends on font size)
             let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
@@ -22,10 +30,10 @@ impl HexSession {
                 total_rows,
                 |ui, row_range| {
                     // Collect input events once per frame and store in the app state
-                    *self.events.borrow_mut() = collect_ui_events(ui);
+                    *self.events.borrow_mut() = events::collect_ui_events(ui);
 
                     // Draw the main canvas with hex content
-                    self.draw_main_canvas(ui, row_range, bytes_per_row);
+                    self.draw_main_canvas(ui, row_range, bytes_per_row, display_start);
                 },
             );
         });
@@ -40,13 +48,15 @@ impl HexSession {
         ui: &mut egui::Ui,
         row_range: Range<usize>,
         bytes_per_row: usize,
+        display_start: usize,
     ) {
         // Get state of the mouse click from aggregated events
-        let pointer_down = self.events.borrow().pointer_down;
-        let pointer_hover = self.events.borrow().pointer_hover;
+        // let pointer_down = self.events.borrow().pointer_down;
+        // let pointer_hover = self.events.borrow().pointer_hover;
+        let pointer_state = self.events.borrow().pointer_state;
 
         // Detect released clicked
-        if !pointer_down {
+        if !pointer_state.pointer_down {
             self.selection.released = true;
         }
 
@@ -66,8 +76,8 @@ impl HexSession {
         }
 
         // Start and end addresses of the whole visible area
-        let start = self.addr.start() + row_range.start * bytes_per_row;
-        let end = self.addr.start() + row_range.end * bytes_per_row + bytes_per_row;
+        let start = display_start + row_range.start * bytes_per_row;
+        let end = display_start + row_range.end * bytes_per_row + bytes_per_row;
 
         // Get bytes from the buffer for the whole area at once
         let bytes = self.ih.read_range_safe(start, end - start);
@@ -77,9 +87,9 @@ impl HexSession {
             self.draw_row(
                 ui,
                 row,
-                pointer_down,
-                pointer_hover,
+                pointer_state,
                 bytes_per_row,
+                display_start,
                 &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
             );
         }
@@ -113,13 +123,17 @@ impl HexSession {
         &mut self,
         ui: &mut egui::Ui,
         row: usize,
-        pointer_down: bool,
-        pointer_hover: Option<egui::Pos2>,
+        pointer_state: events::PointerState,
         bytes_per_row: usize,
+        display_start: usize,
         bytes: &[Option<u8>],
     ) {
+        // Get state of the mouse click
+        let pointer_hover = pointer_state.pointer_hover;
+        let pointer_down = pointer_state.pointer_down;
+
         // Start and end addresses of the current row
-        let start = self.addr.start() + row * bytes_per_row;
+        let start = display_start + row * bytes_per_row;
         let end = start + bytes_per_row;
 
         ui.horizontal(|ui| {
@@ -157,7 +171,7 @@ impl HexSession {
                 };
 
                 // Show byte as a button
-                let button = light_mono_button(
+                let button = ui_button::light_mono_button(
                     ui,
                     egui::Vec2::new(21.0, 18.0),
                     display_value.as_str(),

@@ -14,6 +14,7 @@ pub enum IntelHexError {
     ParseRecordError(IntelHexErrorKind, usize),
     CreateRecordError(IntelHexErrorKind),
     UpdateError(IntelHexErrorKind),
+    GenericError(String),
 }
 
 impl fmt::Display for IntelHexError {
@@ -36,6 +37,9 @@ impl fmt::Display for IntelHexError {
                     f,
                     "Error encountered during update of IntelHex instance:\n{base_err}",
                 )
+            }
+            Self::GenericError(msg) => {
+                write!(f, "Generic error: {msg}")
             }
         }
     }

@@ -99,10 +99,12 @@ impl HexSession {
                         ui.label("u8");
                         ui.label(val_u8.to_string());
                         ui.end_row();
+
                         let val_i8 = i8::from_le_bytes([bytes[0]]);
                         ui.label("i8");
                         ui.label(val_i8.to_string());
                         ui.end_row();
+
                         let val_bin = format!("{val_u8:08b}");
                         ui.label("bin");
                         ui.label(val_bin);
@@ -113,11 +115,13 @@ impl HexSession {
                         ui.label("u16");
                         ui.label(format_with_separators(val_u16));
                         ui.end_row();
+
                         let val_i16 =
                             i16::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i16");
                         ui.label(format_with_separators(val_i16));
                         ui.end_row();
+
                         let val_bin = format!("{val_u16:016b}");
                         ui.label("bin");
                         ui.label(val_bin);
@@ -128,16 +132,19 @@ impl HexSession {
                         ui.label("u32");
                         ui.label(format_with_separators(val_u32));
                         ui.end_row();
+
                         let val_i32 =
                             i32::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i32");
                         ui.label(format_with_separators(val_i32));
                         ui.end_row();
+
                         let val_f32 =
                             f32::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("f32");
                         ui.label(format_float(val_f32));
                         ui.end_row();
+
                         let val_bin = format!("{val_u32:032b}");
                         let multiline = format!("{}\n{}", &val_bin[0..24], &val_bin[24..32]);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
@@ -151,16 +158,19 @@ impl HexSession {
                         ui.label("u64");
                         ui.label(format_with_separators(val_u64));
                         ui.end_row();
+
                         let val_i64 =
                             i64::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i64");
                         ui.label(format_with_separators(val_i64));
                         ui.end_row();
+
                         let val_f64 =
                             f64::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("f64");
                         ui.label(format_float(val_f64));
                         ui.end_row();
+
                         let val_bin = format!("{val_u64:064b}");
                         let multiline = format!(
                             "{}\n{}\n{}",

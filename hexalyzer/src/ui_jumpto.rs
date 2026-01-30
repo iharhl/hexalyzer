@@ -27,6 +27,21 @@ impl HexSession {
                 .desired_width(ui.available_width() - 30.0),
         );
 
+        ui.add_space(5.0);
+
+        // Display the current address / selection range
+        if let Some(sel) = self.selection.range {
+            if sel[0] == sel[1] {
+                ui.label(format!("Current address: 0x{:X}", sel[0]));
+            } else {
+                let sel_min = sel[0].min(sel[1]);
+                let sel_max = sel[0].max(sel[1]);
+                ui.label(format!("Selected: 0x{sel_min:X} - 0x{sel_max:X}"));
+            }
+        } else {
+            ui.label("Current address: --");
+        }
+
         if self.jump_to.loose_focus {
             textedit.surrender_focus();
             self.jump_to.loose_focus = false;
@@ -43,6 +58,11 @@ impl HexSession {
 
         if self.events.borrow().enter_released && self.jump_to.has_focus {
             self.jump_to.addr = usize::from_str_radix(&self.jump_to.input, 16).ok();
+
+            // Select the byte we just jumped to
+            if let Some(addr) = self.jump_to.addr {
+                self.selection.update(addr);
+            }
         }
     }
 }

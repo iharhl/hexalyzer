@@ -4,7 +4,7 @@
 </div>
 
 Hexalyzer is an app for inspecting and modifying firmware files and binary data.
-Any hex or binary encoded file can technically be opened.
+Any hex or binary encoded file can technically be opened. Recommended for embedded firmware analysis.
 
 Hexalyzer project contains two main parts:
 - A modern GUI application that can display and edit contents of HEX and BIN files.
@@ -87,11 +87,13 @@ handle memory-sparse firmware files using a BTreeMap buffer.
 
 ### Key Features
 
-- **Sparse Data Support**: Uses `BTreeMap<usize, u8>` to store data, meaning files with large gaps 
-between memory segments don't consume unnecessary RAM.
+- **Sparse Data Support**: Uses `BTreeMap<usize, Vec<u8>>` to store data, meaning files with large gaps 
+between memory segments don't consume unnecessary RAM. Performance remains optimized by storing
+contiguous chunks. The key represents the starting address, and the `Vec<u8>` contains the
+payload which ensures fast lookups.
 
-- **Data editing**: Allows updating single bytes, byte slices, and supports relocation to a new
-start address.
+- **Data editing**: Allows updating single bytes, byte ranges, supports relocation to a new
+start address, etc.
 
 - **Flexible API**: Allows for easy parsing and update of hex data as well as straightforward
 integration into other projects.
@@ -123,9 +125,10 @@ fn main() {
             println!("Error during update: {:?}", res.unwrap_err().to_string())
         }
 
-        // Iterate over contiguous segments
-        // Since it uses a BTreeMap, keys are always sorted by address
-        for (addr, byte) in ih.iter().take(10) {
+        // Iterate over all bytes, ignoring address gaps.
+        // Since it uses a BTreeMap, keys are always sorted by address.
+        // To iterate over contiguous chunks, use ih.iter() instead.
+        for (addr, byte) in ih.bytes().take(10) {
             println!("{:X}: {:02X}", addr, byte);
         }
     }
@@ -142,7 +145,7 @@ Its functionality includes:
 - Converting a file to between BIN and HEX formats.
 - Merging multiple files into a single one (mixing BIN and HEX files is allowed).
 
-```shell
+```
  ----------------------------------------------------------------
 |  Intel HEX Utility  | v0.1.0 - Copyright (c) 2026 Ihar Hlukhau |
  ----------------------------------------------------------------
@@ -169,6 +172,8 @@ Examples:
 
 v0.1.0 (2026-01-14) - Initial Release
 
+v0.2.0 (2026-02-XX) - TBD
+
 
 ## Potential app improvements
 
@@ -184,16 +189,7 @@ search, edits, etc. copy data around.
 - Potential fix: render whole row as a single galley (`LayoutJob`) for hex and another for ASCII; detect
 hovered/selected cell via math on mouse position instead of individual widgets.
 
-2. BTreeMap lookups in a tight render loop
-
-- Issue: `ui_centralpanel.rs` repeatedly calls `ih.get_byte(addr)` per cell (`BTreeMap::get` has O(log n) time
-complexity).
-
-- Impact: multiplied across all visible bytes each frame → wastes CPU.
-
-- Fix: prefetch visible window once per frame into a small `Vec<Option<u8>>` and index into it.
-
-3. Virtual scroll over (potentially huge) sparse ranges
+2. Virtual scroll over (potentially huge) sparse ranges
 
 - Issue: hex files can have address gaps, these gaps are displayed as empty rows.
 
@@ -202,20 +198,11 @@ complexity).
 - Fix: compress gaps into a separator. The problem is that jump/search/etc offset calculations have to be
 adjusted accordingly.
 
-4. Tabs are hacky to say the least...
-
+3. Tabs are hacky to say the least...
 
 ### Architectural weaknesses
 
-1. Data representated as `BTreeMap<usize, u8>`
-
-- Memory-heavy and slow for contiguous data. Typical firmware is largely contiguous; a byte-per-node map scales
-poorly beyond ~100–300k bytes.
-
-- Possible solution: represent data as contiguous segments `BTreeMap<usize, Vec<u8>>`, where key is the offset
-(aka start address of the contiguous segment) and value is the data vector.
-
-2. UI tightly couples rendering and model details
+1. UI tightly couples rendering and model details
 
 - HexSession owns data, selection, editing, search, and paints per-byte widgets directly. Harder to unit test, 
 refactor and optimize.
@@ -223,7 +210,7 @@ refactor and optimize.
 - Possible solution: introduce a ViewModel layer: compute a lightweight "visible page" (bytes, ascii, selection
 masks) separate from painting. The painter consumes this without hitting the data layer repeatedly.
 
-3. Synchronous tasks on the main thread
+2. Synchronous tasks on the main thread
 
 - File load/save and potentially large searches run on the UI thread without the possibility to cancel.
 
@@ -231,9 +218,7 @@ masks) separate from painting. The painter consumes this without hitting the dat
 
 ### Additional features
 
-1. Make CLI for `intelhexlib`
-2. Support Copy, Undo, Redo, etc.
-3. Support ELF format
-4. Show the current address of the selected byte
-5. Add timestamp (time since epoch) type in the data inspector
-6. Saving an entire app state / session?
+1. Support Copy, Undo, Redo, etc.
+2. Support ELF format
+3. Add timestamp (time since epoch) type in the data inspector
+4. Saving an entire app state / session

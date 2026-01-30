@@ -175,7 +175,7 @@ impl HexSession {
 
         // Show matches count if any
         let label_text = if self.search.results.is_empty() {
-            "--".to_string()
+            "No results".to_string()
         } else {
             format!(
                 "Hits: {} (Current: {})",

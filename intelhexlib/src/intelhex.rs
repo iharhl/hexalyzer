@@ -230,6 +230,17 @@ impl IntelHex {
                 }
             }
         }
+
+        // For now, limit the address range to u32 limit.
+        // Check at the end to not hinder the parsing performance.
+        if let Some(max_addr) = self.get_max_addr()
+            && max_addr > u32::MAX as usize
+        {
+            return Err(IntelHexError::GenericError(
+                "Maximum address exceeds 32-bit range".to_string(),
+            ));
+        }
+
         Ok(())
     }
 

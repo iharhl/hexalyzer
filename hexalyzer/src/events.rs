@@ -1,11 +1,16 @@
 use eframe::egui;
 
 #[derive(Default, Clone, Copy)]
+pub struct PointerState {
+    pub(crate) pointer_hover: Option<egui::Pos2>,
+    pub(crate) pointer_down: bool,
+}
+
+#[derive(Default, Clone, Copy)]
 pub struct EventState {
     pub(crate) last_key_released: Option<egui::Key>,
     pub(crate) last_hex_char_released: Option<char>,
-    pub(crate) pointer_down: bool,
-    pub(crate) pointer_hover: Option<egui::Pos2>,
+    pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
     pub(crate) arrow_key_released: Option<egui::Key>,
@@ -40,8 +45,10 @@ const fn key_to_hex_char(key: egui::Key) -> Option<char> {
 pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
     ui.input(|i| {
         let mut state = EventState {
-            pointer_down: i.pointer.primary_down(),
-            pointer_hover: i.pointer.hover_pos(),
+            pointer_state: PointerState {
+                pointer_hover: i.pointer.hover_pos(),
+                pointer_down: i.pointer.primary_down(),
+            },
             ..Default::default()
         };
 
@@ -61,7 +68,13 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
                 }
 
                 // Store arrow keys release directly
-                if matches!(*key, egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::ArrowUp | egui::Key::ArrowDown) {
+                if matches!(
+                    *key,
+                    egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowDown
+                ) {
                     state.arrow_key_released = Some(*key);
                 }
 

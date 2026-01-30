@@ -29,17 +29,17 @@ impl StepScrollArea {
         add_contents: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>) -> R,
     ) -> R {
         // Allocate the full available space
-        let (rect, _response) =
-            ui.allocate_at_least(ui.available_size(), egui::Sense::click());
+        let (rect, _response) = ui.allocate_at_least(ui.available_size(), egui::Sense::click());
 
         // Get / set row state
         let mut top_row = self
             .target_row
             .unwrap_or_else(|| ui.data_mut(|d| *d.get_temp_mut_or_default(self.id)));
 
-        // Make discrete scroll logic (one row is a scroll step)
+        // Make discrete scroll logic (one row is a scroll step).
+        // Add threshold to ignore small drifts.
         let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll_delta.abs() > 0.4 { // threshold to ignore small drifts
+        if scroll_delta.abs() > 0.4 {
             let row_delta = if scroll_delta > 0.0 { -1 } else { 1 };
             top_row = top_row.saturating_add_signed(row_delta);
         }
@@ -48,7 +48,8 @@ impl StepScrollArea {
         // Visible rows are not fully accurate. Had to add margin for a more consistent display.
         let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
         let visible_rows = (rect.height() / full_row_size).floor() as usize;
-        let max_top_row = total_rows.saturating_sub(visible_rows);
+        // Allow 1 empty row at the bottom
+        let max_top_row = total_rows.saturating_sub(visible_rows - 1);
         top_row = top_row.min(max_top_row);
 
         ui.data_mut(|d| d.insert_temp(self.id, top_row));
