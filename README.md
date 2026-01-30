@@ -10,7 +10,7 @@ Hexalyzer project contains two main parts:
 - A modern GUI application that can display and edit contents of HEX and BIN files.
 - A standalone Intel HEX parsing library.
 
-![Hexalyzer app preview](docs/hexalyzer-ex.png)
+![Hexalyzer app preview](docs/hexalyzer-demo.png)
 
 
 ## Installation
@@ -24,7 +24,10 @@ Go into hexalyzer directory `cd hexalyzer` and run:
 This will create `.exe` installer for Windows, and `.dmg` installer for
 macOS. Linux was not tested but should work too.
 
-When the tag is available, the installers will be attached.
+To build the CLI tool, run
+`cargo build -p intelhexlib --features cli --release`
+
+When the tag is available, the installers and CLI will be attached.
 
 ### Notes for Windows
 
@@ -149,7 +152,7 @@ Its functionality includes:
 
 ```
  ----------------------------------------------------------------
-|  Intel HEX Utility  | v0.1.0 - Copyright (c) 2026 Ihar Hlukhau |
+|  Intel HEX Utility  | v0.2.0 - Copyright (c) 2026 Ihar Hlukhau |
  ----------------------------------------------------------------
 
 Usage:
@@ -174,7 +177,8 @@ Examples:
 
 v0.1.0 (2026-01-14) - Initial Release
 
-v0.2.0 (2026-02-XX) - TBD
+v0.2.0 (2026-01-30) - Release with added usability features and
+improved performance
 
 
 ## Potential app improvements
