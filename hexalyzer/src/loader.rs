@@ -99,7 +99,8 @@ impl HexViewerApp {
         };
 
         // Determine unique scroll widget id
-        let scroll_id = self.sessions.len() + 1;
+        let scroll_id = self.next_scroll_id;
+        self.next_scroll_id += 1;
 
         let mut new_session = HexSession {
             name: path.file_name().map_or_else(

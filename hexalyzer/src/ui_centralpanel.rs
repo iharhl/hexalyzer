@@ -17,7 +17,7 @@ impl HexSession {
 
             // Get start and end addresses of the visible area. Find total rows to display.
             let display_start = align_down(*self.addr.start());
-            let display_end = align_up(*self.addr.end() + 1);
+            let display_end = align_up((*self.addr.end()).saturating_add(1));
             let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
             // Get row height in pixels (depends on font size)
@@ -60,11 +60,11 @@ impl HexSession {
             self.selection.released = true;
         }
 
-        // Get state of key press (hex chars) from aggregated events
-        let typed_char = self.events.borrow().last_hex_char_released;
+        // Get state of key presses (hex chars)
+        let hex_chars = self.events.borrow().hex_chars_released.clone();
 
         // Update byte edit buffer base on the key press
-        self.update_edit_buffer(typed_char);
+        self.update_edit_buffer(&hex_chars);
 
         // Cancel byte editing / selection on Esc press
         if self.events.borrow().escape_pressed {
