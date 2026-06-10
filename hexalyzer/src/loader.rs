@@ -74,18 +74,18 @@ impl HexViewerApp {
         };
 
         let res = match file_type {
-            FileKind::Hex => ih.load_hex(path),
+            FileKind::Hex => ih.load_hex(path).map_err(|e| e.to_string()),
             FileKind::Bin => {
                 // Set base addr to 0 to avoid complex logic around waiting
                 // to fill the pop-up. Can re-addr later.
-                ih.load_bin(path, 0)
+                ih.load_bin(path, 0).map_err(|e| e.to_string())
             }
-            FileKind::Elf => Err("ELF files are not yet supported".into()),
-            FileKind::Unknown => Err("Could not determine the file type".into()),
+            FileKind::Elf => Err("ELF files are not yet supported".to_string()),
+            FileKind::Unknown => Err("Could not determine the file type".to_string()),
         };
 
         if let Err(msg) = res {
-            self.error.borrow_mut().replace(msg.to_string());
+            self.error.borrow_mut().replace(msg);
             return;
         }
 
@@ -165,14 +165,14 @@ impl HexViewerApp {
             // Load the selected file into the new IntelHex instance
             let mut new_ih = IntelHex::new();
             let res = match file_type {
-                FileKind::Hex => new_ih.load_hex(path),
-                FileKind::Bin => new_ih.load_bin(path, 0),
-                FileKind::Elf => Err("ELF files are not yet supported".into()),
-                FileKind::Unknown => Err("Could not determine the file type".into()),
+                FileKind::Hex => new_ih.load_hex(path).map_err(|e| e.to_string()),
+                FileKind::Bin => new_ih.load_bin(path, 0).map_err(|e| e.to_string()),
+                FileKind::Elf => Err("ELF files are not yet supported".to_string()),
+                FileKind::Unknown => Err("Could not determine the file type".to_string()),
             };
 
             if let Err(msg) = res {
-                self.error.borrow_mut().replace(msg.to_string());
+                self.error.borrow_mut().replace(msg);
                 return;
             }
 

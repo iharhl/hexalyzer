@@ -27,9 +27,7 @@ impl HexSession {
     /// during byte editing process
     pub(crate) fn update_edit_buffer(&mut self, typed_chars: &[char]) {
         for &ch in typed_chars {
-            if self.selection.range.is_some()
-                && self.selection.released
-                && !self.editor.in_progress
+            if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
             {
                 // Start editing if user types a hex char
                 if ch.is_ascii_hexdigit() {

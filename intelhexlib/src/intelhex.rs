@@ -10,7 +10,6 @@ use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
 use crate::search::{SearchType, search};
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -100,6 +99,7 @@ impl IntelHex {
         self.buffer.clear();
     }
 
+    #[allow(clippy::too_many_lines)]
     /// Parse the raw contents of the hex file and fill internal record vector.
     ///
     /// # Errors
@@ -236,8 +236,9 @@ impl IntelHex {
         if let Some(max_addr) = self.get_max_addr()
             && max_addr > u32::MAX as usize
         {
-            return Err(IntelHexError::GenericError(
-                "Maximum address exceeds 32-bit range".to_string(),
+            return Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::AddressRangeOverflow,
+                count,
             ));
         }
 
@@ -256,7 +257,7 @@ impl IntelHex {
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
     /// assert_eq!(ih.size, 239);
     /// ```
-    pub fn from_hex<P: AsRef<Path>>(filepath: P) -> Result<Self, Box<dyn Error>> {
+    pub fn from_hex<P: AsRef<Path>>(filepath: P) -> Result<Self, IntelHexError> {
         let mut ih = Self::new();
         ih.load_hex(filepath)?;
         Ok(ih)
@@ -276,7 +277,7 @@ impl IntelHex {
     ///
     /// assert_eq!(ih.size, 239);
     /// ```
-    pub fn load_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), Box<dyn Error>> {
+    pub fn load_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
         // Read the contents of the file
         let raw_bytes = std::fs::read(&filepath)?;
 
@@ -312,7 +313,7 @@ impl IntelHex {
     pub fn from_bin<P: AsRef<Path>>(
         filepath: P,
         base_address: usize,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, IntelHexError> {
         let mut ih = Self::new();
         ih.load_bin(filepath, base_address)?;
         Ok(ih)
@@ -337,7 +338,7 @@ impl IntelHex {
         &mut self,
         filepath: P,
         base_address: usize,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), IntelHexError> {
         // Read the contents of the file
         let data = std::fs::read(&filepath)?;
 
@@ -371,7 +372,7 @@ impl IntelHex {
     ///
     /// assert_eq!(ih.size, 239);
     /// ```
-    pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), Box<dyn Error>> {
+    pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
         // Ensure the parent directory exists
         if let Some(parent) = filepath.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
@@ -466,7 +467,7 @@ impl IntelHex {
         &mut self,
         filepath: P,
         gap_fill: u8,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), IntelHexError> {
         // Ensure the parent directory exists
         if let Some(parent) = filepath.as_ref().parent() {
             std::fs::create_dir_all(parent)?;

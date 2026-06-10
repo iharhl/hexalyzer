@@ -124,21 +124,15 @@ fn test_hex_parsing_returns_error() {
     // Parse hex file
     let res = IntelHex::from_hex(input_path);
 
-    // Check the error
-    match res {
-        Err(e) => {
-            if let Some(ih_err) = e.downcast_ref::<IntelHexError>() {
-                assert_eq!(
-                    ih_err,
-                    &IntelHexError::ParseRecordError(
-                        IntelHexErrorKind::RecordChecksumMismatch(0x55, 0xFF),
-                        1
-                    )
-                );
-            } else {
-                panic!("Error was not an IntelHexError");
-            }
-        }
-        Ok(_) => panic!("Expected an error, but got Ok"),
+    if let Err(err) = res {
+        assert_eq!(
+            err,
+            IntelHexError::ParseRecordError(
+                IntelHexErrorKind::RecordChecksumMismatch(0x55, 0xFF),
+                1
+            )
+        );
+    } else {
+        panic!("Expected an error, but got Ok");
     }
 }
