@@ -25,58 +25,55 @@ impl ByteEdit {
 impl HexSession {
     /// Update edit buffer used for temporary storage of user key inputs
     /// during byte editing process
-    pub(crate) fn update_edit_buffer(&mut self, typed_char: Option<char>) {
-        if self.selection.range.is_some()
-            && self.selection.released
-            && !self.editor.in_progress
-            && let Some(ch) = typed_char
-        {
-            // Start editing if user types a hex char
-            if ch.is_ascii_hexdigit() {
-                self.editor.in_progress = true;
-                self.editor.addr = self.selection.range;
-                self.editor.buffer = ch.to_ascii_uppercase().to_string();
-            }
-        } else if self.editor.in_progress {
-            // If other bytes got selected - clear and return
-            if self.editor.addr != self.selection.range {
-                self.editor.clear();
-            }
+    pub(crate) fn update_edit_buffer(&mut self, typed_chars: &[char]) {
+        for &ch in typed_chars {
+            if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
+            {
+                // Start editing if user types a hex char
+                if ch.is_ascii_hexdigit() {
+                    self.editor.in_progress = true;
+                    self.editor.addr = self.selection.range;
+                    self.editor.buffer = ch.to_ascii_uppercase().to_string();
+                }
+            } else if self.editor.in_progress {
+                // If other bytes got selected - clear and return
+                if self.editor.addr != self.selection.range {
+                    self.editor.clear();
+                }
 
-            if let Some(ch) = typed_char {
                 self.editor.buffer.insert(1, ch);
-            }
 
-            // Allow only hex chars
-            self.editor.buffer.retain(|c| c.is_ascii_hexdigit());
+                // Allow only hex chars
+                self.editor.buffer.retain(|c| c.is_ascii_hexdigit());
 
-            // When two hex chars are entered - commit automatically
-            if self.editor.buffer.len() == 2 {
-                if let Ok(value) = u8::from_str_radix(&self.editor.buffer, 16)
-                    && let Some([start, end]) = self.editor.addr
-                {
-                    // Handle reversed range
-                    let s = start.min(end);
-                    let e = start.max(end);
+                // When two hex chars are entered - commit automatically
+                if self.editor.buffer.len() == 2 {
+                    if let Ok(value) = u8::from_str_radix(&self.editor.buffer, 16)
+                        && let Some([start, end]) = self.editor.addr
+                    {
+                        // Handle reversed range
+                        let s = start.min(end);
+                        let e = start.max(end);
 
-                    // Update the bytes in the map. If the byte is actually changed -
-                    // insert its address into Vec that tracks modified bytes.
-                    for addr in s..=e {
-                        let prev_value = self.ih.read_byte(addr);
-                        if self.ih.update_byte(addr, value).ok() == Some(())
-                            && let Some(prev) = prev_value
-                            && value != prev
-                        {
-                            self.editor.modified.entry(addr).or_insert(prev);
+                        // Update the bytes in the map. If the byte is actually changed -
+                        // insert its address into Vec that tracks modified bytes.
+                        for addr in s..=e {
+                            let prev_value = self.ih.read_byte(addr);
+                            if self.ih.update_byte(addr, value).ok() == Some(())
+                                && let Some(prev) = prev_value
+                                && value != prev
+                            {
+                                self.editor.modified.entry(addr).or_insert(prev);
+                            }
+                        }
+
+                        // If there are search results - redo it
+                        if !self.search.results.is_empty() {
+                            self.search.redo();
                         }
                     }
-
-                    // If there are search results - redo it
-                    if !self.search.results.is_empty() {
-                        self.search.redo();
-                    }
+                    self.editor.clear();
                 }
-                self.editor.clear();
             }
         }
     }

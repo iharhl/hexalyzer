@@ -59,14 +59,21 @@ impl HexViewerApp {
                                 ui.end_row();
                             });
 
-                        // Get the last modified time of the file.
-                        // If changed -> show warning.
-                        let last_modified = get_last_modified(&curr_session.ih.filepath).ok();
+                        // Get the last modified time of the file. Changed -> display warning.
+                        // Throttled at once per 2 seconds to avoid too many syscalls.
                         if !filepath.is_empty()
-                            && let Some(t) = last_modified
-                            && t != std::time::SystemTime::UNIX_EPOCH
-                            && t != curr_session.last_modified
+                            && curr_session.last_mod_check.elapsed()
+                                > std::time::Duration::from_secs(2)
                         {
+                            curr_session.last_mod_check = std::time::Instant::now();
+                            if let Some(t) = get_last_modified(&curr_session.ih.filepath).ok()
+                                && t != std::time::SystemTime::UNIX_EPOCH
+                            {
+                                curr_session.file_changed_on_disk = t != curr_session.last_modified;
+                            }
+                        }
+
+                        if curr_session.file_changed_on_disk {
                             ui.add_space(3.0);
                             ui.label(
                                 egui::RichText::new("File on disk has been modified!")

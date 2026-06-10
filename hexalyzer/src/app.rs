@@ -46,6 +46,10 @@ pub struct HexSession {
     pub jump_to: JumpTo,
     /// Last modified time of the file. Used to detect file changes.
     pub last_modified: std::time::SystemTime,
+    /// Last time the file modification was checked. Used to throttle `fs::metadata` calls.
+    pub last_mod_check: std::time::Instant,
+    /// Whether the file on disk has diverged from the loaded data (sticky until next poll).
+    pub file_changed_on_disk: bool,
     /// Scroll id that allows each tab to keep its own scroll position
     pub scroll_id: usize,
 
@@ -68,6 +72,8 @@ pub struct HexViewerApp {
     pub bytes_per_row: usize,
     /// Pop up handler
     pub popup: Popup,
+    /// Monotonically increasing counter for unique scroll IDs
+    pub(crate) next_scroll_id: usize,
 
     // -- Shared UI states
     /// Per-frame state of user inputs
@@ -88,6 +94,8 @@ impl Default for HexSession {
             search: Search::default(),
             jump_to: JumpTo::default(),
             last_modified: std::time::SystemTime::UNIX_EPOCH,
+            last_mod_check: std::time::Instant::now(),
+            file_changed_on_disk: false,
             scroll_id: 0,
             events: Rc::new(RefCell::new(EventState::default())),
             error: Rc::new(RefCell::new(None)),
@@ -103,6 +111,7 @@ impl Default for HexViewerApp {
             max_tabs: 5,
             bytes_per_row: 16,
             popup: Popup::default(),
+            next_scroll_id: 1,
             events: Rc::new(RefCell::new(EventState::default())),
             error: Rc::new(RefCell::new(None)),
         }

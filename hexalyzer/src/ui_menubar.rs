@@ -1,7 +1,6 @@
 use crate::HexViewerApp;
 use crate::ui_popup::PopupType;
 use eframe::egui;
-use std::error::Error;
 
 enum SaveFormat {
     Bin,
@@ -54,7 +53,7 @@ impl HexViewerApp {
 
                             let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
 
-                            let res: Result<(), Box<dyn Error>> = match format {
+                            let res = match format {
                                 SaveFormat::Bin => curr_session.ih.write_bin(path, 0x00),
                                 SaveFormat::Hex => curr_session.ih.write_hex(path),
                             };

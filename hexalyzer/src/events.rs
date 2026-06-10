@@ -6,10 +6,10 @@ pub struct PointerState {
     pub(crate) pointer_down: bool,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct EventState {
     pub(crate) last_key_released: Option<egui::Key>,
-    pub(crate) last_hex_char_released: Option<char>,
+    pub(crate) hex_chars_released: Vec<char>,
     pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
@@ -79,7 +79,7 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
                 }
 
                 if let Some(ch) = key_to_hex_char(*key) {
-                    state.last_hex_char_released = Some(ch);
+                    state.hex_chars_released.push(ch);
                 }
             }
         }

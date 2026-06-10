@@ -1,21 +1,36 @@
 //! The `error` module defines the [`IntelHexError`] struct that describes the errors that
 //! can occur when parsing, updating, or writing Intel HEX files via [`IntelHex`].
-//! It contains the three pieces of information:
-//! 1. When the error occurs, e.g., during parsing or creating the record.
+//! It may contain up to three types of information:
+//! 1. When did the error occur, e.g., during parsing or creating the record.
 //! 2. What kind of error was encountered (via [`IntelHexErrorKind`] struct).
-//! 3. What is the line number (if applicable), e.g., at which line in a hex file the parsing failed.
+//! 3. What is the line number (at which line in a hex file the parsing failed).
 
 use crate::record::RecordType;
 use std::error::Error;
 use std::fmt;
+use std::io;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum IntelHexError {
     ParseRecordError(IntelHexErrorKind, usize),
     CreateRecordError(IntelHexErrorKind),
     UpdateError(IntelHexErrorKind),
-    GenericError(String),
+    Io(io::Error),
 }
+
+impl PartialEq for IntelHexError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ParseRecordError(a, la), Self::ParseRecordError(b, lb)) => a == b && la == lb,
+            (Self::CreateRecordError(a), Self::CreateRecordError(b))
+            | (Self::UpdateError(a), Self::UpdateError(b)) => a == b,
+            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for IntelHexError {}
 
 impl fmt::Display for IntelHexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,10 +53,25 @@ impl fmt::Display for IntelHexError {
                     "Error encountered during update of IntelHex instance:\n{base_err}",
                 )
             }
-            Self::GenericError(msg) => {
-                write!(f, "Generic error: {msg}")
+            Self::Io(err) => {
+                write!(f, "I/O error: {err}")
             }
         }
+    }
+}
+
+impl Error for IntelHexError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for IntelHexError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
     }
 }
 
@@ -59,7 +89,7 @@ pub enum IntelHexErrorKind {
     RecordLengthInvalidForType(RecordType, usize, usize),
     /// Record's address does not match the record type
     RecordAddressInvalidForType(RecordType, usize, usize),
-    /// TBD
+    /// Record is intentionally unsupported for creation (e.g., ESA - library emits ELA instead)
     RecordNotSupported,
     /// Record length is odd
     RecordNotEvenLength,
@@ -79,6 +109,8 @@ pub enum IntelHexErrorKind {
     IntelHexInstanceEmpty,
     /// Address relocation failed due to overflow
     RelocateAddressOverflow(usize),
+    /// Parsed address range exceeds the maximum supported (32-bit)
+    AddressRangeOverflow,
 }
 
 impl fmt::Display for IntelHexErrorKind {
@@ -144,9 +176,11 @@ impl fmt::Display for IntelHexErrorKind {
                     "Address relocation failed due to overflow. Max allowed start address: 0x{address:X}"
                 )
             }
+            Self::AddressRangeOverflow => {
+                write!(f, "Maximum address exceeds 32-bit range")
+            }
         }
     }
 }
 
-impl Error for IntelHexError {}
 impl Error for IntelHexErrorKind {}
