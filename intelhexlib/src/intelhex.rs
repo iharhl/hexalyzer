@@ -938,7 +938,7 @@ impl IntelHex {
     ///
     /// let res = ih1.merge_safe(&ih2);
     ///
-    /// assert!(result.is_ok());
+    /// assert!(res.is_ok());
     /// ```
     pub fn merge_safe(&mut self, other: &Self) -> Result<(), IntelHexError> {
         for (&chunk_start, chunk_data) in &other.buffer {
