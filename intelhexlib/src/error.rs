@@ -89,7 +89,7 @@ pub enum IntelHexErrorKind {
     RecordLengthInvalidForType(RecordType, usize, usize),
     /// Record's address does not match the record type
     RecordAddressInvalidForType(RecordType, usize, usize),
-    /// TBD
+    /// Record is intentionally unsupported for creation (e.g., ESA - library emits ELA instead)
     RecordNotSupported,
     /// Record length is odd
     RecordNotEvenLength,

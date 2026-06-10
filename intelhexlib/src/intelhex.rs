@@ -360,6 +360,9 @@ impl IntelHex {
     #[allow(clippy::cast_possible_truncation)]
     /// Generates an Intel HEX file at the specified path.
     ///
+    /// > **NOTE**: Extended Segment Address (ESA) records are not supported,
+    /// Extended Linear Address (ELA) records are used instead.
+    ///
     /// # Errors
     /// Returns an error if the file cannot be written.
     ///

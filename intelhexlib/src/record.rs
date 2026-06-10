@@ -190,7 +190,9 @@ impl Record {
 
                 Ok(record)
             }
-            // TODO: support legacy record?
+            // ESA is intentionally unsupported: the library always emits ELA records
+            // when writing hex files (see `IntelHex::write_hex`).
+            // Parsing ESA is still supported.
             RecordType::ExtendedSegmentAddress => Err(IntelHexError::CreateRecordError(
                 IntelHexErrorKind::RecordNotSupported,
             )),
@@ -591,6 +593,16 @@ mod tests {
                     0,
                     0xFFFF
                 )
+            ))
+        );
+
+        // Extended Segment Address record - intentionally unsupported
+        let data: [u8; 2] = [0x12, 0x00];
+        let res = Record::create(0, RecordType::ExtendedSegmentAddress, &data);
+        assert_eq!(
+            res,
+            Err(IntelHexError::CreateRecordError(
+                IntelHexErrorKind::RecordNotSupported
             ))
         );
     }
