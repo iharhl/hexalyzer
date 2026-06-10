@@ -99,6 +99,79 @@ impl IntelHex {
         self.buffer.clear();
     }
 
+    /// Check if a new range `[start, end)` overlaps with existing chunks.
+    /// Returns `Err(addr)` with the overlapping address if overlap is found.
+    fn check_no_overlap(&self, start: usize, end: usize) -> Result<(), usize> {
+        // Find a neighbor (previous chunk) and check for overlaps
+        if let Some((&prev_start, prev_data)) = self.buffer.range(..=start).next_back() {
+            let prev_end = prev_start + prev_data.len();
+            if start < prev_end {
+                return Err(start);
+            }
+        }
+
+        // Find a neighbor (next chunk) and check for overlaps
+        if let Some((&next_start, _)) = self.buffer.range(start..).next()
+            && next_start < end
+        {
+            return Err(next_start);
+        }
+
+        Ok(())
+    }
+
+    /// Insert a data chunk at `addr` and merge with adjacent neighbors if contiguous.
+    fn insert_chunk_with_merge(&mut self, addr: usize, mut data: Vec<u8>) {
+        let new_end = addr + data.len();
+
+        let prev_key = self
+            .buffer
+            .range(..=addr)
+            .next_back()
+            .filter(|&(&s, d)| s + d.len() == addr)
+            .map(|(&s, _)| s);
+
+        let can_prepend = self
+            .buffer
+            .range(addr..)
+            .next()
+            .is_some_and(|(&s, _)| s == new_end);
+
+        match (prev_key, can_prepend) {
+            // BRIDGE: [prev][new][next]
+            (Some(pk), true) => {
+                // Remove the 'next' chunk from the buffer and get its data
+                let next_data = self.buffer.remove(&new_end).unwrap_or_default();
+                // Get the 'prev' chunk and append both 'new' and 'next' data to it.
+                // Error cases are not handled here as they were checked above.
+                if let Some(prev_data) = self.buffer.get_mut(&pk) {
+                    prev_data.append(&mut data);
+                    prev_data.extend(next_data);
+                }
+            }
+            // APPEND: [prev][new]
+            (Some(pk), false) => {
+                // Get the 'prev' chunk and append 'new' data to it.
+                // Error cases are not handled here as they were checked above.
+                if let Some(prev_data) = self.buffer.get_mut(&pk) {
+                    prev_data.append(&mut data);
+                }
+            }
+            // PREPEND: [new][next]
+            (None, true) => {
+                // Remove the 'next' chunk from the buffer and get its data
+                let mut next_data = self.buffer.remove(&new_end).unwrap_or_default();
+                // Append 'next' data to the 'new' chunk and insert it into the buffer
+                data.append(&mut next_data);
+                self.buffer.insert(addr, data);
+            }
+            // NEW: [new]
+            (None, false) => {
+                self.buffer.insert(addr, data);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     /// Parse the raw contents of the hex file and fill internal record vector.
     ///
@@ -130,77 +203,17 @@ impl IntelHex {
                     if !record.data.is_empty() {
                         let new_end_addr = addr + record.data.len();
 
-                        // Find a neighbor (previous chunk) and check for overlaps
-                        let (prev_key, can_append) = match self.buffer.range(..=addr).next_back() {
-                            Some((&start, data)) => {
-                                let end = start + data.len();
-                                if addr < end {
-                                    return Err(IntelHexError::ParseRecordError(
-                                        IntelHexErrorKind::RecordAddressOverlap(addr),
-                                        count,
-                                    ));
-                                }
-                                (Some(start), end == addr)
-                            }
-                            None => (None, false),
-                        };
+                        // Check for overlaps
+                        self.check_no_overlap(addr, new_end_addr)
+                            .map_err(|overlap_addr| {
+                                IntelHexError::ParseRecordError(
+                                    IntelHexErrorKind::RecordAddressOverlap(overlap_addr),
+                                    count,
+                                )
+                            })?;
 
-                        // Find a neighbor (next chunk) and check for overlaps
-                        let can_prepend = match self.buffer.range(addr..).next() {
-                            Some((&start, _)) => {
-                                if start < new_end_addr {
-                                    return Err(IntelHexError::ParseRecordError(
-                                        IntelHexErrorKind::RecordAddressOverlap(addr),
-                                        count,
-                                    ));
-                                }
-                                start == new_end_addr
-                            }
-                            None => false,
-                        };
-
-                        // Take ownership of the data (not required)
-                        let mut cur_data = record.data;
-
-                        match (can_append, can_prepend) {
-                            // BRIDGE: [prev][new][next] -> [prev_merged]
-                            (true, true) => {
-                                // Remove the 'next' chunk from the buffer and get its data
-                                let mut next_data =
-                                    self.buffer.remove(&new_end_addr).unwrap_or_default();
-                                // Get the 'prev' chunk and append both 'new' and 'next' data to it.
-                                // Error cases are not handled here as they were checked above.
-                                if let Some(prev_data) =
-                                    self.buffer.get_mut(&prev_key.unwrap_or_default())
-                                {
-                                    prev_data.append(&mut cur_data);
-                                    prev_data.append(&mut next_data);
-                                }
-                            }
-                            // APPEND: [prev][new]
-                            (true, false) => {
-                                // Get the 'prev' chunk and append 'new' data to it.
-                                // Error cases are not handled here as they were checked above.
-                                if let Some(prev_data) =
-                                    self.buffer.get_mut(&prev_key.unwrap_or_default())
-                                {
-                                    prev_data.append(&mut cur_data);
-                                }
-                            }
-                            // PREPEND: [new][next]
-                            (false, true) => {
-                                // Remove the 'next' chunk from the buffer and get its data
-                                let mut next_data =
-                                    self.buffer.remove(&new_end_addr).unwrap_or_default();
-                                // Append 'next' data to the 'new' chunk and insert it into the buffer
-                                cur_data.append(&mut next_data);
-                                self.buffer.insert(addr, cur_data);
-                            }
-                            // NEW: [new]
-                            (false, false) => {
-                                self.buffer.insert(addr, cur_data);
-                            }
-                        }
+                        // Insert data and merge with adjacent chunks
+                        self.insert_chunk_with_merge(addr, record.data);
                     }
                 }
                 RecordType::EndOfFile => {}
@@ -361,7 +374,7 @@ impl IntelHex {
     /// Generates an Intel HEX file at the specified path.
     ///
     /// > **NOTE**: Extended Segment Address (ESA) records are not supported,
-    /// Extended Linear Address (ELA) records are used instead.
+    /// > Extended Linear Address (ELA) records are used instead.
     ///
     /// # Errors
     /// Returns an error if the file cannot be written.
@@ -844,6 +857,55 @@ impl IntelHex {
         ))
     }
 
+    /// Insert a new address range filled with 0x00 bytes into the `IntelHex` buffer.
+    ///
+    /// The range is inclusive: `[start_addr, end_addr]`.
+    /// If the range overlaps with existing data, an error is returned and no changes are made.
+    /// Adjacent chunks are merged automatically.
+    ///
+    /// # Errors
+    /// Returns an error if `start_addr > end_addr`, the range exceeds 32-bit address space,
+    /// or the range overlaps with existing data.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// let mut ih = IntelHex::new();
+    /// ih.write_range(0x1000, 0x100F).unwrap();
+    ///
+    /// assert!(ih.read_range(0x1000, 0xF).is_some());
+    /// ```
+    pub fn write_range(&mut self, start_addr: usize, end_addr: usize) -> Result<(), IntelHexError> {
+        if start_addr > end_addr {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(start_addr),
+            ));
+        }
+
+        if end_addr > u32::MAX as usize {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::AddressRangeOverflow,
+            ));
+        }
+
+        let len = end_addr - start_addr + 1;
+
+        // Check for overlaps
+        self.check_no_overlap(start_addr, end_addr + 1)
+            .map_err(|overlap_addr| {
+                IntelHexError::UpdateError(IntelHexErrorKind::RecordAddressOverlap(overlap_addr))
+            })?;
+
+        // Insert data and merge with adjacent chunks
+        self.insert_chunk_with_merge(start_addr, vec![0x00u8; len]);
+
+        // Update total size
+        self.size = self.buffer.values().map(Vec::len).sum();
+
+        Ok(())
+    }
+
     /// Update the max payload size (number of bytes) per record when writing `IntelHex` file.
     /// Default = 16.
     ///
@@ -947,24 +1009,13 @@ impl IntelHex {
         for (&chunk_start, chunk_data) in &other.buffer {
             let end_addr = chunk_start + chunk_data.len();
 
-            // Check possible overlap with the chunk on the left
-            if let Some((&left_start, left_data)) = self.buffer.range(..=chunk_start).next_back() {
-                let left_end = left_start + left_data.len();
-                if chunk_start < left_end {
-                    return Err(IntelHexError::UpdateError(
-                        IntelHexErrorKind::RecordAddressOverlap(chunk_start),
-                    ));
-                }
-            }
-
-            // Check possible overlap with the chunk on the right
-            if let Some((&right_start, _)) = self.buffer.range(chunk_start..).next()
-                && right_start < end_addr
-            {
-                return Err(IntelHexError::UpdateError(
-                    IntelHexErrorKind::RecordAddressOverlap(right_start),
-                ));
-            }
+            // Check for overlaps
+            self.check_no_overlap(chunk_start, end_addr)
+                .map_err(|overlap_addr| {
+                    IntelHexError::UpdateError(IntelHexErrorKind::RecordAddressOverlap(
+                        overlap_addr,
+                    ))
+                })?;
 
             // Insert the chunk if no overlaps
             self.buffer.insert(chunk_start, chunk_data.clone());
@@ -1693,6 +1744,160 @@ mod tests {
                 IntelHexErrorKind::DuplicateStartAddress,
             ))
         );
+    }
+
+    #[test]
+    fn test_write_range_valid() {
+        // Arrange - empty buffer
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.write_range(0x1000, 0x100F);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.get_min_addr(), Some(0x1000));
+        assert_eq!(ih.get_max_addr(), Some(0x100F));
+        assert_eq!(ih.read_byte(0x1000), Some(0x00));
+        assert_eq!(ih.read_byte(0x100F), Some(0x00));
+        assert_eq!(ih.read_byte(0x1010), None);
+        assert_eq!(ih.size, 16);
+        assert_eq!(ih.buffer.len(), 1);
+
+        // Arrange - single byte
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.write_range(0x00, 0x00);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.get_min_addr(), Some(0x00));
+        assert_eq!(ih.get_max_addr(), Some(0x00));
+        assert_eq!(ih.read_byte(0x00), Some(0x00));
+        assert_eq!(ih.size, 1);
+
+        // Arrange - non-contiguous (gap between existing and new)
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x00, vec![0xAA, 0xBB]);
+
+        // Act
+        let res = ih.write_range(0x1000, 0x1001);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.get_min_addr(), Some(0x00));
+        assert_eq!(ih.get_max_addr(), Some(0x1001));
+        assert_eq!(ih.read_byte(0x00), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1000), Some(0x00));
+        assert_eq!(ih.size, 4);
+        assert_eq!(ih.buffer.len(), 2);
+
+        // Arrange - merge with left neighbor
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.write_range(0x1002, 0x1003);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.get_min_addr(), Some(0x1000));
+        assert_eq!(ih.get_max_addr(), Some(0x1003));
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1002), Some(0x00));
+        assert_eq!(ih.size, 4);
+
+        // Arrange - merge with right neighbor
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1002, vec![0xAA, 0xBB]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.write_range(0x1000, 0x1001);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.get_min_addr(), Some(0x1000));
+        assert_eq!(ih.get_max_addr(), Some(0x1003));
+        assert_eq!(ih.read_byte(0x1000), Some(0x00));
+        assert_eq!(ih.read_byte(0x1002), Some(0xAA));
+        assert_eq!(ih.size, 4);
+
+        // Arrange - bridge (merge with both neighbors)
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA]);
+        ih.buffer.insert(0x1004, vec![0xBB]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.write_range(0x1001, 0x1003);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.get_min_addr(), Some(0x1000));
+        assert_eq!(ih.get_max_addr(), Some(0x1004));
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1001), Some(0x00));
+        assert_eq!(ih.read_byte(0x1004), Some(0xBB));
+        assert_eq!(ih.size, 5);
+    }
+
+    #[test]
+    fn test_write_range_invalid() {
+        // Arrange - start > end
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.write_range(0x100F, 0x1000);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(0x100F)
+            ))
+        );
+
+        // Arrange - overlap with existing chunk (start inside existing)
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC]);
+        ih.size = 3;
+
+        // Act
+        let res = ih.write_range(0x1001, 0x1005);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::RecordAddressOverlap(0x1001)
+            ))
+        );
+        // Verify no mutation
+        assert_eq!(ih.size, 3);
+        assert_eq!(ih.read_byte(0x1001), Some(0xBB));
+
+        // Arrange - overlap with next chunk (end overlaps next)
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1010, vec![0xAA]);
+        ih.size = 1;
+
+        // Act
+        let res = ih.write_range(0x1000, 0x1010);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::RecordAddressOverlap(0x1010)
+            ))
+        );
+        assert_eq!(ih.size, 1);
     }
 }
 
