@@ -255,7 +255,7 @@ impl IntelHex {
     /// use intelhexlib::IntelHex;
     ///
     /// let ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
-    /// assert_eq!(ih.size, 239);
+    /// assert_eq!(ih.size, 68);
     /// ```
     pub fn from_hex<P: AsRef<Path>>(filepath: P) -> Result<Self, IntelHexError> {
         let mut ih = Self::new();
@@ -275,7 +275,7 @@ impl IntelHex {
     /// let mut ih = IntelHex::new();
     /// ih.load_hex("tests/fixtures/ih_valid_1.hex").unwrap();
     ///
-    /// assert_eq!(ih.size, 239);
+    /// assert_eq!(ih.size, 68);
     /// ```
     pub fn load_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
         // Read the contents of the file
@@ -284,14 +284,14 @@ impl IntelHex {
         // Clear provided IntelHex instance
         self.clear();
 
-        // Compute the size (in bytes)
-        self.size = raw_bytes.len();
-
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
         // Parse contents
         self.parse(&raw_bytes)?;
+
+        // Compute the payload size from the parsed buffer
+        self.size = self.buffer.values().map(Vec::len).sum();
 
         Ok(())
     }
@@ -373,7 +373,7 @@ impl IntelHex {
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
     /// ih.write_hex("build/ex1/ih.hex");
     ///
-    /// assert_eq!(ih.size, 239);
+    /// assert_eq!(ih.size, 68);
     /// ```
     pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
         // Ensure the parent directory exists
@@ -462,7 +462,7 @@ impl IntelHex {
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
     /// ih.write_bin("build/ex3/ih.bin", 0x00);
     ///
-    /// assert_eq!(ih.size, 239);
+    /// assert_eq!(ih.size, 68);
     /// // Due to address gaps, the written bin file size is large
     /// assert_eq!(std::fs::metadata("build/ex3/ih.bin").unwrap().len(), 115264);
     /// ```

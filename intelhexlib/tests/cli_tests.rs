@@ -92,7 +92,7 @@ fn test_ihex_shows_info_valid() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(abs_path.to_string_lossy().as_ref())
-            && stdout.contains("239 bytes")
+            && stdout.contains("68 bytes")
             && stdout.contains("0x0000_0000 - 0x0001_C23F"),
         "stdout did not look like info text:\n{stdout}"
     );
