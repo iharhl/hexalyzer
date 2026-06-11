@@ -6,6 +6,10 @@ use eframe::egui;
 impl HexViewerApp {
     /// Show the side panel with the file information, jump to address, search, and data inspector.
     pub(crate) fn show_side_panel(&mut self, ctx: &egui::Context) {
+        if !self.side_panel_expanded {
+            return;
+        }
+
         egui::SidePanel::left("left_panel")
             .exact_width(280.0)
             .show(ctx, |ui| {

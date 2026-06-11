@@ -74,6 +74,8 @@ pub struct HexViewerApp {
     pub popup: Popup,
     /// Monotonically increasing counter for unique scroll IDs
     pub(crate) next_scroll_id: usize,
+    /// Whether the side panel is expanded or collapsed
+    pub side_panel_expanded: bool,
 
     // -- Shared UI states
     /// Per-frame state of user inputs
@@ -112,6 +114,7 @@ impl Default for HexViewerApp {
             bytes_per_row: 16,
             popup: Popup::default(),
             next_scroll_id: 1,
+            side_panel_expanded: true,
             events: Rc::new(RefCell::new(EventState::default())),
             error: Rc::new(RefCell::new(None)),
         }
