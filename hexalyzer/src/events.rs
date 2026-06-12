@@ -13,6 +13,7 @@ pub struct EventState {
     pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
+    pub(crate) shift_down: bool,
     pub(crate) arrow_key_released: Option<egui::Key>,
 }
 
@@ -49,6 +50,7 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
                 pointer_hover: i.pointer.hover_pos(),
                 pointer_down: i.pointer.primary_down(),
             },
+            shift_down: i.modifiers.shift,
             ..Default::default()
         };
 

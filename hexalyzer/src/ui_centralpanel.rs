@@ -54,6 +54,7 @@ impl HexSession {
         // let pointer_down = self.events.borrow().pointer_down;
         // let pointer_hover = self.events.borrow().pointer_hover;
         let pointer_state = self.events.borrow().pointer_state;
+        let shift_down = self.events.borrow().shift_down;
 
         // Detect released clicked
         if !pointer_state.pointer_down {
@@ -88,6 +89,7 @@ impl HexSession {
                 ui,
                 row,
                 pointer_state,
+                shift_down,
                 bytes_per_row,
                 display_start,
                 &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
@@ -124,6 +126,7 @@ impl HexSession {
         ui: &mut egui::Ui,
         row: usize,
         pointer_state: events::PointerState,
+        shift_down: bool,
         bytes_per_row: usize,
         display_start: usize,
         bytes: &[Option<u8>],
@@ -188,7 +191,11 @@ impl HexSession {
                     self.search.loose_focus();
                     self.jump_to.loose_focus();
 
-                    self.selection.update(addr);
+                    if shift_down {
+                        self.selection.shift_update(addr);
+                    } else {
+                        self.selection.update(addr);
+                    }
                 }
 
                 // Highlight byte if selected or modified
@@ -231,7 +238,11 @@ impl HexSession {
                     && let Some(hover) = pointer_hover
                     && label.rect.contains(hover)
                 {
-                    self.selection.update(addr);
+                    if shift_down {
+                        self.selection.shift_update(addr);
+                    } else {
+                        self.selection.update(addr);
+                    }
                 }
 
                 // Highlight char if selected or modified
