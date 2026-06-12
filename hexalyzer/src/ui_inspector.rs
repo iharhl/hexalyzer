@@ -50,6 +50,68 @@ fn format_float<T: Into<f64>>(float_value: T) -> String {
     format!("{}.{}", format_with_separators(int_part), frac_part)
 }
 
+/// Format the unix timestamp (seconds since epoch) as a UTC string.
+fn format_unix_timestamp(seconds: i64) -> Option<String> {
+    // Limit range to years 1 to 9999:
+    // Year 1-01-01 00:00:00 UTC is -62,135,596,800 seconds.
+    // Year 9999-12-31 23:59:59 UTC is 253,402,300,800 seconds.
+    if !(-62_135_596_800..=253_402_300_800).contains(&seconds) {
+        return None;
+    }
+
+    let (secs, year_offset) = if seconds < 0 {
+        let cycle_secs = 146_097 * 86_400; // 12,622,780,800
+        let cycles = (-seconds / cycle_secs) + 1;
+        (seconds + cycles * cycle_secs, -cycles * 400)
+    } else {
+        (seconds, 0)
+    };
+
+    let secs_in_day = 86_400;
+    let days = secs / secs_in_day;
+    let seconds_of_day = secs % secs_in_day;
+
+    let hours = seconds_of_day / 3_600;
+    let minutes = (seconds_of_day % 3_600) / 60;
+    let s = seconds_of_day % 60;
+
+    let mut year = 1970_i64;
+    let mut remaining_days = days;
+
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_days = if is_leap {
+        [31_i64, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31_i64, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &d in &month_days {
+        if remaining_days < d {
+            break;
+        }
+        remaining_days -= d;
+        month += 1;
+    }
+
+    let day = remaining_days + 1;
+    let final_year = year + year_offset;
+
+    Some(format!(
+        "{final_year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}:{s:02} UTC"
+    ))
+}
+
 impl HexSession {
     #[allow(clippy::similar_names, clippy::too_many_lines)]
     /// Displays the inspector panel for the selected data.
@@ -145,6 +207,27 @@ impl HexSession {
                         ui.label(format_float(val_f32));
                         ui.end_row();
 
+                        if val_i32 < 0 {
+                            ui.label("epoch\n(u32)");
+                            ui.label(
+                                format_unix_timestamp(i64::from(val_u32))
+                                    .unwrap_or_default()
+                                    .replacen(' ', "\n", 1),
+                            );
+                            ui.end_row();
+
+                            ui.label("epoch\n(i32)");
+                            ui.label(
+                                format_unix_timestamp(i64::from(val_i32))
+                                    .unwrap_or_default()
+                                    .replacen(' ', "\n", 1),
+                            );
+                        } else {
+                            ui.label("epoch");
+                            ui.label(format_unix_timestamp(i64::from(val_u32)).unwrap_or_default());
+                        }
+                        ui.end_row();
+
                         let val_bin = format!("{val_u32:032b}");
                         let multiline = format!("{}\n{}", &val_bin[0..24], &val_bin[24..32]);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
@@ -171,6 +254,23 @@ impl HexSession {
                         ui.label(format_float(val_f64));
                         ui.end_row();
 
+                        let epoch_u64 = if val_u64 <= 253_402_300_800 {
+                            i64::try_from(val_u64).ok().and_then(format_unix_timestamp)
+                        } else {
+                            None
+                        };
+                        let epoch_i64 = format_unix_timestamp(val_i64);
+
+                        if let Some(u_str) = epoch_u64 {
+                            ui.label("epoch");
+                            ui.label(u_str);
+                            ui.end_row();
+                        } else if let Some(i_str) = epoch_i64 {
+                            ui.label("epoch");
+                            ui.label(i_str);
+                            ui.end_row();
+                        }
+
                         let val_bin = format!("{val_u64:064b}");
                         let multiline = format!(
                             "{}\n{}\n{}",
@@ -190,5 +290,52 @@ impl HexSession {
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_unix_timestamp() {
+        assert_eq!(
+            format_unix_timestamp(0),
+            Some("1970-01-01 00:00:00 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(86_400),
+            Some("1970-01-02 00:00:00 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(31_536_000),
+            Some("1971-01-01 00:00:00 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(63_072_000),
+            Some("1972-01-01 00:00:00 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(2_147_483_647),
+            Some("2038-01-19 03:14:07 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(4_294_967_295),
+            Some("2106-02-07 06:28:15 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(-2_147_483_648),
+            Some("1901-12-13 20:45:52 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(-1),
+            Some("1969-12-31 23:59:59 UTC".to_string())
+        );
+        assert_eq!(
+            format_unix_timestamp(1_718_150_400),
+            Some("2024-06-12 00:00:00 UTC".to_string())
+        );
+        assert_eq!(format_unix_timestamp(-62_135_596_801), None);
+        assert_eq!(format_unix_timestamp(253_402_300_801), None);
     }
 }
