@@ -29,6 +29,14 @@ impl Selection {
         sel[1] = addr;
     }
 
+    /// Extend selection range to the provided address without clearing.
+    /// Used for Shift+Click range selection.
+    pub(crate) fn shift_update(&mut self, addr: usize) {
+        self.released = false;
+        let sel = self.range.get_or_insert([addr, addr]);
+        sel[1] = addr;
+    }
+
     /// Clear selection range
     pub(crate) const fn clear(&mut self) {
         self.range = None;
