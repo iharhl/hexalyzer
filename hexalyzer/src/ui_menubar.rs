@@ -21,6 +21,7 @@ fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
 }
 
 impl HexViewerApp {
+    #[allow(clippy::too_many_lines)]
     /// Displays the top menu bar with File, Edit, View, and About buttons
     pub(crate) fn show_menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
@@ -100,6 +101,47 @@ impl HexViewerApp {
                             && curr_session.ih.size != 0
                         {
                             curr_session.restore();
+                        }
+
+                        ui.separator();
+
+                        let has_selection = self
+                            .get_curr_session()
+                            .is_some_and(|s| s.selection.range.is_some());
+
+                        let hex_shortcut = if cfg!(target_os = "macos") {
+                            "⌘C"
+                        } else {
+                            "Ctrl+C"
+                        };
+                        let ascii_shortcut = if cfg!(target_os = "macos") {
+                            "Shift+⌘C"
+                        } else {
+                            "Ctrl+Shift+C"
+                        };
+
+                        if ui
+                            .add_enabled(
+                                has_selection,
+                                egui::Button::new("Copy as Hex").shortcut_text(hex_shortcut),
+                            )
+                            .clicked()
+                            && let Some(s) = self.get_curr_session()
+                            && let Some(text) = s.selected_bytes_as_hex()
+                        {
+                            ui.ctx().copy_text(text);
+                        }
+
+                        if ui
+                            .add_enabled(
+                                has_selection,
+                                egui::Button::new("Copy as ASCII").shortcut_text(ascii_shortcut),
+                            )
+                            .clicked()
+                            && let Some(s) = self.get_curr_session()
+                            && let Some(text) = s.selected_bytes_as_ascii()
+                        {
+                            ui.ctx().copy_text(text);
                         }
                     });
 
