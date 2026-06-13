@@ -12,6 +12,7 @@
 
 mod app;
 mod byteedit;
+mod clipboard;
 mod events;
 mod loader;
 mod selection;
@@ -60,6 +61,8 @@ impl eframe::App for HexViewerApp {
             // Uncomment if needed.
             // ctx.set_debug_on_hover(true);
         }
+
+        self.handle_copy_shortcut(ctx);
 
         self.show_menu_bar(ctx);
 

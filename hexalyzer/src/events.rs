@@ -59,6 +59,7 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
             if let egui::Event::Key {
                 key,
                 pressed: false,
+                modifiers,
                 ..
             } = event
             {
@@ -80,7 +81,9 @@ pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
                     state.arrow_key_released = Some(*key);
                 }
 
-                if let Some(ch) = key_to_hex_char(*key) {
+                if !modifiers.command
+                    && let Some(ch) = key_to_hex_char(*key)
+                {
                     state.hex_chars_released.push(ch);
                 }
             }

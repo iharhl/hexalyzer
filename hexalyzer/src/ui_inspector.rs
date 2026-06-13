@@ -1,6 +1,7 @@
 use crate::app::{Endianness, HexSession};
 use eframe::egui;
 use eframe::egui::Ui;
+use std::time::{Duration, Instant};
 
 #[allow(clippy::needless_pass_by_value)]
 /// Format the number so that it has separators (for readability)
@@ -22,7 +23,22 @@ pub fn format_with_separators<T: ToString>(n: T) -> String {
     format!("{sign}{result}")
 }
 
-/// Format the float so that it is nicely presented
+/// Format float for clipboard: no commas or thousands separators.
+/// Uses scientific notation for extreme values.
+fn format_float_plain<T: Into<f64>>(float_value: T) -> String {
+    let f = float_value.into();
+    let formatted = if f.abs() >= 1e8 || (f != 0.0 && f.abs() < 1e-7) {
+        format!("{f:.17e}")
+    } else {
+        format!("{f:.17}")
+    };
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Format the float for inspector view
 fn format_float<T: Into<f64>>(float_value: T) -> String {
     let f = float_value.into();
 
@@ -158,73 +174,107 @@ impl HexSession {
                 match bytes.len() {
                     1 => {
                         let val_u8 = u8::from_le_bytes([bytes[0]]);
+                        let v = val_u8.to_string();
                         ui.label("u8");
-                        ui.label(val_u8.to_string());
+                        copyable_value(ui, "u8", &v, &v);
                         ui.end_row();
 
                         let val_i8 = i8::from_le_bytes([bytes[0]]);
+                        let v = val_i8.to_string();
                         ui.label("i8");
-                        ui.label(val_i8.to_string());
+                        copyable_value(ui, "i8", &v, &v);
                         ui.end_row();
 
                         let val_bin = format!("{val_u8:08b}");
                         ui.label("bin");
-                        ui.label(val_bin);
+                        copyable_value(ui, "bin", &val_bin, &val_bin);
                     }
                     2 => {
                         let val_u16 =
                             u16::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("u16");
-                        ui.label(format_with_separators(val_u16));
+                        copyable_value(
+                            ui,
+                            "u16",
+                            &format_with_separators(val_u16),
+                            &val_u16.to_string(),
+                        );
                         ui.end_row();
 
                         let val_i16 =
                             i16::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i16");
-                        ui.label(format_with_separators(val_i16));
+                        copyable_value(
+                            ui,
+                            "i16",
+                            &format_with_separators(val_i16),
+                            &val_i16.to_string(),
+                        );
                         ui.end_row();
 
                         let val_bin = format!("{val_u16:016b}");
                         ui.label("bin");
-                        ui.label(val_bin);
+                        copyable_value(ui, "bin", &val_bin, &val_bin);
                     }
                     4 => {
                         let val_u32 =
                             u32::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("u32");
-                        ui.label(format_with_separators(val_u32));
+                        copyable_value(
+                            ui,
+                            "u32",
+                            &format_with_separators(val_u32),
+                            &val_u32.to_string(),
+                        );
                         ui.end_row();
 
                         let val_i32 =
                             i32::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i32");
-                        ui.label(format_with_separators(val_i32));
+                        copyable_value(
+                            ui,
+                            "i32",
+                            &format_with_separators(val_i32),
+                            &val_i32.to_string(),
+                        );
                         ui.end_row();
 
                         let val_f32 =
                             f32::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("f32");
-                        ui.label(format_float(val_f32));
+                        copyable_value(
+                            ui,
+                            "f32",
+                            &format_float(val_f32),
+                            &format_float_plain(val_f32),
+                        );
                         ui.end_row();
 
                         if val_i32 < 0 {
+                            let ts_u32 =
+                                format_unix_timestamp(i64::from(val_u32)).unwrap_or_default();
                             ui.label("epoch\n(u32)");
-                            ui.label(
-                                format_unix_timestamp(i64::from(val_u32))
-                                    .unwrap_or_default()
-                                    .replacen(' ', "\n", 1),
+                            copyable_value(
+                                ui,
+                                "epoch (u32)",
+                                &ts_u32.replacen(' ', "\n", 1),
+                                ts_u32.trim_end_matches(" UTC"),
                             );
                             ui.end_row();
 
+                            let ts_i32 =
+                                format_unix_timestamp(i64::from(val_i32)).unwrap_or_default();
                             ui.label("epoch\n(i32)");
-                            ui.label(
-                                format_unix_timestamp(i64::from(val_i32))
-                                    .unwrap_or_default()
-                                    .replacen(' ', "\n", 1),
+                            copyable_value(
+                                ui,
+                                "epoch (i32)",
+                                &ts_i32.replacen(' ', "\n", 1),
+                                ts_i32.trim_end_matches(" UTC"),
                             );
                         } else {
+                            let ts = format_unix_timestamp(i64::from(val_u32)).unwrap_or_default();
                             ui.label("epoch");
-                            ui.label(format_unix_timestamp(i64::from(val_u32)).unwrap_or_default());
+                            copyable_value(ui, "epoch", &ts, ts.trim_end_matches(" UTC"));
                         }
                         ui.end_row();
 
@@ -233,25 +283,40 @@ impl HexSession {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
                             ui.label("bin");
                         });
-                        ui.label(multiline);
+                        copyable_value(ui, "bin", &multiline, &val_bin);
                     }
                     8 => {
                         let val_u64 =
                             u64::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("u64");
-                        ui.label(format_with_separators(val_u64));
+                        copyable_value(
+                            ui,
+                            "u64",
+                            &format_with_separators(val_u64),
+                            &val_u64.to_string(),
+                        );
                         ui.end_row();
 
                         let val_i64 =
                             i64::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("i64");
-                        ui.label(format_with_separators(val_i64));
+                        copyable_value(
+                            ui,
+                            "i64",
+                            &format_with_separators(val_i64),
+                            &val_i64.to_string(),
+                        );
                         ui.end_row();
 
                         let val_f64 =
                             f64::from_le_bytes(bytes.as_slice().try_into().unwrap_or_default());
                         ui.label("f64");
-                        ui.label(format_float(val_f64));
+                        copyable_value(
+                            ui,
+                            "f64",
+                            &format_float(val_f64),
+                            &format_float_plain(val_f64),
+                        );
                         ui.end_row();
 
                         let epoch_u64 = if val_u64 <= 253_402_300_800 {
@@ -263,11 +328,11 @@ impl HexSession {
 
                         if let Some(u_str) = epoch_u64 {
                             ui.label("epoch");
-                            ui.label(u_str);
+                            copyable_value(ui, "epoch", &u_str, u_str.trim_end_matches(" UTC"));
                             ui.end_row();
                         } else if let Some(i_str) = epoch_i64 {
                             ui.label("epoch");
-                            ui.label(i_str);
+                            copyable_value(ui, "epoch", &i_str, i_str.trim_end_matches(" UTC"));
                             ui.end_row();
                         }
 
@@ -281,7 +346,7 @@ impl HexSession {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
                             ui.label("bin");
                         });
-                        ui.label(multiline);
+                        copyable_value(ui, "bin", &multiline, &val_bin);
                     }
                     _ => {
                         ui.label("--");
@@ -290,6 +355,37 @@ impl HexSession {
                     }
                 }
             });
+    }
+}
+
+/// Renders a clickable label that copies `copy` text to clipboard on click.
+/// Displays a "Copied!" tooltip for 1.2 seconds after clicking, or "Click to copy" on hover.
+fn copyable_value(ui: &mut Ui, type_label: &str, display: &str, copy: &str) {
+    let response = ui.add(
+        egui::Label::new(display)
+            .selectable(false)
+            .sense(egui::Sense::click()),
+    );
+
+    let clicked = response.clicked();
+
+    let id = ui.id().with(type_label).with("copied");
+    let copied_at: Option<Instant> = ui.data(|d| d.get_temp(id));
+    let is_recently_copied = copied_at.is_some_and(|t| t.elapsed() < Duration::from_secs_f32(1.2));
+
+    if is_recently_copied {
+        response.show_tooltip_text("Copied!");
+        response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    } else {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Click to copy");
+    }
+
+    if clicked {
+        ui.ctx().copy_text(copy.to_string());
+        ui.data_mut(|d| d.insert_temp(id, Instant::now()));
+        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.2));
     }
 }
 
