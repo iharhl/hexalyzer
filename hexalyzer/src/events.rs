@@ -92,6 +92,7 @@ fn collect_inner(i: &egui::InputState) -> EventState {
             }
 
             if !modifiers.command
+                && !modifiers.alt
                 && let Some(ch) = key_to_hex_char(*key)
             {
                 state.hex_chars_released.push(ch);

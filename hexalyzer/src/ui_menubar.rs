@@ -1,4 +1,5 @@
 use crate::HexViewerApp;
+use crate::app::HexSession;
 use crate::ui_popup::PopupState;
 use eframe::egui;
 
@@ -21,7 +22,6 @@ fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
 }
 
 impl HexViewerApp {
-    #[allow(clippy::too_many_lines)]
     /// Displays the top menu bar with File, Edit, View, and About buttons
     pub(crate) fn show_menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
@@ -29,162 +29,182 @@ impl HexViewerApp {
 
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // FILE MENU
-                    ui.menu_button("File", |ui| {
-                        // OPEN BUTTON
-                        if ui.button("Open file...").clicked()
-                            && let Some(path) =
-                                rfd::FileDialog::new().set_title("Open File").pick_file()
-                        {
-                            self.load_file(&path);
-                        }
-
-                        // EXPORT BUTTON
-                        if ui.button("Export file...").clicked()
-                            && let Some(curr_session) = self.get_curr_session_mut()
-                            && curr_session.ih.size != 0
-                            && let Some(mut path) = rfd::FileDialog::new()
-                                .set_title("Save As")
-                                .set_file_name(curr_session.name.clone())
-                                .save_file()
-                        {
-                            if path.extension().is_none() {
-                                path.set_extension("bin");
-                            }
-
-                            let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
-
-                            let res = match format {
-                                SaveFormat::Bin => curr_session.ih.write_bin(path, 0x00),
-                                SaveFormat::Hex => curr_session.ih.write_hex(path),
-                            };
-                            if let Err(msg) = res {
-                                self.error = Some(msg.to_string());
-                            }
-                        }
-
-                        // CLOSE BUTTON
-                        if ui.button("Close file").clicked()
-                            && let Some(curr_session_id) = self.active_index
-                            && let Some(_) = self.get_curr_session()
-                        {
-                            self.close_file(curr_session_id);
-                        }
-                    });
-
-                    // EDIT BUTTON
-                    ui.menu_button("Edit", |ui| {
-                        // READDRESS BUTTON
-                        if ui.button("Relocate...").clicked()
-                            && !self.popup.active
-                            && let Some(curr_session) = self.get_curr_session()
-                            && curr_session.ih.size != 0
-                        {
-                            self.popup.open(PopupState::ReAddr {
-                                addr: String::new(),
-                            });
-                        }
-
-                        // MERGE BUTTON
-                        if ui.button("Merge...").clicked()
-                            && !self.popup.active
-                            && let Some(curr_session) = self.get_curr_session()
-                            && curr_session.ih.size != 0
-                            && let Some(path) = rfd::FileDialog::new()
-                                .set_title("Merge with File")
-                                .pick_file()
-                        {
-                            self.popup.open(PopupState::Merge {
-                                path,
-                                addr_curr: String::new(),
-                                addr_merge: String::new(),
-                            });
-                        }
-
-                        // INSERT RANGE BUTTON
-                        if ui.button("Insert Range...").clicked()
-                            && !self.popup.active
-                            && let Some(curr_session) = self.get_curr_session()
-                            && curr_session.ih.size != 0
-                        {
-                            self.popup.open(PopupState::InsertRange {
-                                start: String::new(),
-                                end: String::new(),
-                            });
-                        }
-
-                        // RESTORE BUTTON
-                        if ui.button("Restore byte changes").clicked()
-                            && let Some(curr_session) = self.get_curr_session_mut()
-                            && curr_session.ih.size != 0
-                        {
-                            curr_session.restore();
-                        }
-
-                        ui.separator();
-
-                        let has_selection = self
-                            .get_curr_session()
-                            .is_some_and(|s| s.selection.range.is_some());
-
-                        let hex_shortcut = if cfg!(target_os = "macos") {
-                            "⌘C"
-                        } else {
-                            "Ctrl+C"
-                        };
-                        let ascii_shortcut = if cfg!(target_os = "macos") {
-                            "Shift+⌘C"
-                        } else {
-                            "Ctrl+Shift+C"
-                        };
-
-                        if ui
-                            .add_enabled(
-                                has_selection,
-                                egui::Button::new("Copy as Hex").shortcut_text(hex_shortcut),
-                            )
-                            .clicked()
-                            && let Some(s) = self.get_curr_session()
-                            && let Some(text) = s.selected_bytes_as_hex()
-                        {
-                            ui.ctx().copy_text(text);
-                        }
-
-                        if ui
-                            .add_enabled(
-                                has_selection,
-                                egui::Button::new("Copy as ASCII").shortcut_text(ascii_shortcut),
-                            )
-                            .clicked()
-                            && let Some(s) = self.get_curr_session()
-                            && let Some(text) = s.selected_bytes_as_ascii()
-                        {
-                            ui.ctx().copy_text(text);
-                        }
-                    });
-
-                    // VIEW BUTTON
-                    ui.menu_button("View", |ui| {
-                        ui.label("Select Bytes per Row:");
-
-                        ui.add_space(3.0);
-
-                        // RadioButtons to select between 16 and 32 bytes per row
-                        ui.radio_value(&mut self.bytes_per_row, 16, "16 bytes");
-                        ui.add_space(1.0);
-                        ui.radio_value(&mut self.bytes_per_row, 32, "32 bytes");
-                    });
-
-                    // ABOUT BUTTON
-                    let about_button = ui.button("About");
-
-                    if about_button.clicked() && !self.popup.active {
-                        self.popup.open(PopupState::About);
-                    }
+                    self.file_menu(ui);
+                    self.edit_menu(ui);
+                    self.view_menu(ui);
+                    self.about_button(ui);
                 });
             });
 
             ui.add_space(2.0);
         });
+    }
+
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("File", |ui| {
+            // OPEN BUTTON
+            if ui.button("Open file...").clicked()
+                && let Some(path) = rfd::FileDialog::new().set_title("Open File").pick_file()
+            {
+                self.load_file(&path);
+            }
+
+            // EXPORT BUTTON
+            if ui.button("Export file...").clicked()
+                && let Some(curr_session) = self.get_curr_session_mut()
+                && curr_session.ih.size != 0
+                && let Some(mut path) = rfd::FileDialog::new()
+                    .set_title("Save As")
+                    .set_file_name(curr_session.name.clone())
+                    .save_file()
+            {
+                if path.extension().is_none() {
+                    path.set_extension("bin");
+                }
+
+                let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
+
+                let res = match format {
+                    SaveFormat::Bin => curr_session.ih.write_bin(path, 0x00),
+                    SaveFormat::Hex => curr_session.ih.write_hex(path),
+                };
+                if let Err(msg) = res {
+                    self.error = Some(msg.to_string());
+                }
+            }
+
+            // CLOSE BUTTON
+            if ui.button("Close file").clicked()
+                && let Some(curr_session_id) = self.active_index
+                && let Some(_) = self.get_curr_session()
+            {
+                self.close_file(curr_session_id);
+            }
+        });
+    }
+
+    fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Edit", |ui| {
+            self.edit_popup_items(ui);
+            ui.separator();
+            self.edit_copy_items(ui);
+        });
+    }
+
+    fn edit_popup_items(&mut self, ui: &mut egui::Ui) {
+        // RELOCATE BUTTON
+        if ui.button("Relocate...").clicked()
+            && !self.popup.active
+            && let Some(curr_session) = self.get_curr_session()
+            && curr_session.ih.size != 0
+        {
+            self.popup.open(PopupState::ReAddr {
+                addr: String::new(),
+            });
+        }
+
+        // MERGE BUTTON
+        if ui.button("Merge...").clicked()
+            && !self.popup.active
+            && let Some(curr_session) = self.get_curr_session()
+            && curr_session.ih.size != 0
+            && let Some(path) = rfd::FileDialog::new()
+                .set_title("Merge with File")
+                .pick_file()
+        {
+            self.popup.open(PopupState::Merge {
+                path,
+                addr_curr: String::new(),
+                addr_merge: String::new(),
+            });
+        }
+
+        // INSERT RANGE BUTTON
+        if ui.button("Insert Range...").clicked()
+            && !self.popup.active
+            && let Some(curr_session) = self.get_curr_session()
+            && curr_session.ih.size != 0
+        {
+            self.popup.open(PopupState::InsertRange {
+                start: String::new(),
+                end: String::new(),
+            });
+        }
+
+        // RESTORE BUTTON
+        if ui.button("Restore byte changes").clicked()
+            && let Some(curr_session) = self.get_curr_session_mut()
+            && curr_session.ih.size != 0
+        {
+            curr_session.restore();
+        }
+    }
+
+    fn edit_copy_items(&self, ui: &mut egui::Ui) {
+        let has_selection = self
+            .get_curr_session()
+            .is_some_and(|s| s.selection.range.is_some());
+
+        let hex_shortcut = if cfg!(target_os = "macos") {
+            "Cmd+C"
+        } else {
+            "Ctrl+C"
+        };
+        let ascii_shortcut = if cfg!(target_os = "macos") {
+            "Shift+Cmd+C"
+        } else {
+            "Ctrl+Shift+C"
+        };
+        let addr_shortcut = if cfg!(target_os = "macos") {
+            "Opt+C"
+        } else {
+            "Alt+C"
+        };
+
+        self.copy_button(ui, has_selection, "Copy as Hex", hex_shortcut, |s| {
+            s.selected_bytes_as_hex()
+        });
+        self.copy_button(ui, has_selection, "Copy as ASCII", ascii_shortcut, |s| {
+            s.selected_bytes_as_ascii()
+        });
+        self.copy_button(ui, has_selection, "Copy Address", addr_shortcut, |s| {
+            s.selected_addr()
+        });
+    }
+
+    fn copy_button(
+        &self,
+        ui: &mut egui::Ui,
+        enabled: bool,
+        label: &str,
+        shortcut: &str,
+        get_text: impl Fn(&HexSession) -> Option<String>,
+    ) {
+        if ui
+            .add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut))
+            .clicked()
+            && let Some(s) = self.get_curr_session()
+            && let Some(text) = get_text(s)
+        {
+            ui.ctx().copy_text(text);
+        }
+    }
+
+    fn view_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("View", |ui| {
+            ui.label("Select Bytes per Row:");
+            ui.add_space(3.0);
+            ui.radio_value(&mut self.bytes_per_row, 16, "16 bytes");
+            ui.add_space(1.0);
+            ui.radio_value(&mut self.bytes_per_row, 32, "32 bytes");
+        });
+    }
+
+    fn about_button(&mut self, ui: &mut egui::Ui) {
+        let about_button = ui.button("About");
+
+        if about_button.clicked() && !self.popup.active {
+            self.popup.open(PopupState::About);
+        }
     }
 }

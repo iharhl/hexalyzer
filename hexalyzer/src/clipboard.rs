@@ -3,12 +3,16 @@ use eframe::egui;
 use std::fmt::Write;
 
 impl HexViewerApp {
-    /// Intercepts copy shortcuts (⌘C / Ctrl+C for hex, Shift+⌘C / Ctrl+Shift+C for ASCII)
-    /// at the start of the frame, before any widget can consume them.
+    /// Intercepts copy shortcuts at the start of the frame and performs one of the
+    /// following copy actions:
+    /// - Cmd+C / Ctrl+C for hex bytes
+    /// - Shift+Cmd+C / Ctrl+Shift+C for ASCII string
+    /// - Opt+C / Alt+C for address
     pub(crate) fn handle_copy_shortcut(&self, ctx: &egui::Context) {
-        let (copy_hex, copy_ascii) = ctx.input_mut(|i| {
+        let (copy_hex, copy_ascii, copy_addr) = ctx.input_mut(|i| {
             let mut hex = false;
             let mut ascii = false;
+            let mut addr = false;
 
             // Check if the OS generated native Copy event
             let has_copy_event = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
@@ -21,12 +25,12 @@ impl HexViewerApp {
                     hex = true;
                 }
 
-                // Prevent the event from bubbling down to focused text inputs
+                // Consume the copy event so it isn't forwarded to focused text inputs
                 i.events.retain(|e| !matches!(e, egui::Event::Copy));
             }
 
             // Fallback: Catch raw key presses if the OS didn't detect it as Event::Copy
-            if !hex && !ascii {
+            if !hex && !ascii && !addr {
                 let has_key = i.events.iter().any(|e| {
                     matches!(
                         e,
@@ -38,7 +42,9 @@ impl HexViewerApp {
                     )
                 });
                 if has_key {
-                    if i.modifiers.command && i.modifiers.shift {
+                    if i.modifiers.alt {
+                        addr = true;
+                    } else if i.modifiers.command && i.modifiers.shift {
                         ascii = true;
                     } else if i.modifiers.command {
                         hex = true;
@@ -56,7 +62,7 @@ impl HexViewerApp {
                 }
             }
 
-            (hex, ascii)
+            (hex, ascii, addr)
         });
 
         if let Some(session) = self.get_curr_session() {
@@ -64,13 +70,15 @@ impl HexViewerApp {
                 ctx.copy_text(text);
             } else if copy_ascii && let Some(text) = session.selected_bytes_as_ascii() {
                 ctx.copy_text(text);
+            } else if copy_addr && let Some(text) = session.selected_addr() {
+                ctx.copy_text(text);
             }
         }
     }
 }
 
 impl HexSession {
-    /// Returns the selected bytes formatted as a continuous hex string (e.g. `"48656C6C6F"`),
+    /// Returns the selected bytes formatted as a continuous hex string (e.g. `"FFFF"`),
     /// or `None` if no selection exists or no bytes are present.
     pub(crate) fn selected_bytes_as_hex(&self) -> Option<String> {
         let sel = self.selection.range?;
@@ -100,5 +108,13 @@ impl HexSession {
             }
         }
         if ascii.is_empty() { None } else { Some(ascii) }
+    }
+
+    /// Returns the start address of the selection formatted as hex (e.g. `"0x00001000"`),
+    /// or `None` if no selection exists.
+    pub(crate) fn selected_addr(&self) -> Option<String> {
+        let sel = self.selection.range?;
+        let min = *sel.iter().min()?;
+        Some(format!("0x{min:08X}"))
     }
 }
