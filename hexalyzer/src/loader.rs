@@ -133,12 +133,12 @@ impl HexViewerApp {
         }
     }
 
-    /// Merges the content of a file into the current IntelHex session.
+    /// Merges the content of a file into the current `IntelHex` session.
     ///
     /// # Parameters
     /// - `path`: Reference to a `PathBuf` that represents the path of the file to be merged.
-    /// - `addr1`: Optional start address to which the current session’s IntelHex instance should be relocated.
-    /// - `addr2`: Optional start address to which the contents of the new file should be relocated.
+    /// - `addr1`: Optional start addr to which the current session's `IntelHex` instance should be relocated.
+    /// - `addr2`: Optional start addr to which the contents of the new file should be relocated.
     pub(crate) fn merge_file_into_curr_session(
         &mut self,
         path: &PathBuf,

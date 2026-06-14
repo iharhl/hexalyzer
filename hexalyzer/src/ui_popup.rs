@@ -1,6 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::colors;
-use crate::events::{self, collect_ui_events, collect_ui_events_ctx};
+use crate::events;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -42,11 +42,7 @@ impl PopupState {
     }
 
     /// Render the popup content. Returns `true` when the user confirms (OK / Enter).
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        events: &events::EventState,
-    ) -> bool {
+    fn show(&mut self, ui: &mut egui::Ui, events: &events::EventState) -> bool {
         match self {
             Self::Error(msg) => {
                 ui.label(msg.as_str());
@@ -167,8 +163,7 @@ impl PopupState {
                 let end_addr = usize::from_str_radix(&end, 16).ok();
 
                 let Some((start, end)) = start_addr.zip(end_addr) else {
-                    app.error
-                        .replace("Invalid address format".to_string());
+                    app.error.replace("Invalid address format".to_string());
                     return;
                 };
 
