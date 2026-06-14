@@ -1,6 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::colors;
-use crate::events::collect_ui_events;
+use crate::events::{collect_ui_events, collect_ui_events_ctx};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -25,6 +25,12 @@ impl PopupType {
             Self::InsertRange => "Insert Range",
         }
     }
+
+    /// Returns `true` if this popup type should block interaction with the
+    /// rest of the application.
+    pub const fn is_blocking(&self) -> bool {
+        matches!(self, Self::Error)
+    }
 }
 
 //  ========================== Popup logic =================================== //
@@ -39,6 +45,9 @@ pub struct Popup {
     text_input_1: String,
     /// Second text field content in the pop-up, if present
     text_input_2: String,
+    /// Whether the popup window is being hovered or dragged, used to suppress
+    /// selection interaction in the `CentralPanel`.
+    pub(crate) interacting: bool,
 }
 
 impl Popup {
@@ -46,6 +55,7 @@ impl Popup {
     pub fn clear(&mut self) {
         self.active = false;
         self.ptype = None;
+        self.interacting = false;
     }
 }
 
@@ -62,6 +72,7 @@ impl HexViewerApp {
         false
     }
 
+    /// Display the 'About' pop-up
     fn display_about(ui: &mut egui::Ui) -> bool {
         ui.vertical(|ui| {
             ui.add_space(5.0);
@@ -101,6 +112,7 @@ impl HexViewerApp {
         false
     }
 
+    /// Display the 'Re-address' pop-up
     fn display_readdr(&mut self, ui: &mut egui::Ui) -> bool {
         ui.vertical(|ui| {
             ui.add_space(3.0);
@@ -131,6 +143,7 @@ impl HexViewerApp {
         false
     }
 
+    /// Display the 'Merge' pop-up
     fn display_merge(&mut self, ui: &mut egui::Ui) -> bool {
         ui.vertical(|ui| {
             ui.add_space(3.0);
@@ -176,6 +189,7 @@ impl HexViewerApp {
         false
     }
 
+    /// Display the 'Insert Range' pop-up
     fn display_insert_range(&mut self, ui: &mut egui::Ui) -> bool {
         ui.vertical(|ui| {
             ui.add_space(3.0);
@@ -222,24 +236,6 @@ impl HexViewerApp {
     pub(crate) fn show_popup(&mut self, ctx: &egui::Context) {
         let content_rect = ctx.content_rect();
 
-        // Block interaction with the app
-        egui::Area::new(egui::Id::from("modal_blocker"))
-            .order(egui::Order::Background)
-            .fixed_pos(content_rect.left_top())
-            .show(ctx, |ui| {
-                ui.allocate_rect(content_rect, egui::Sense::click());
-
-                // Collect input events once per frame and store in the app state
-                *self.events.borrow_mut() = collect_ui_events(ui);
-            });
-
-        // Darken the background
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Background,
-            egui::Id::new("modal_bg"),
-        ));
-        painter.rect_filled(content_rect, 0.0, colors::SHADOW);
-
         let mut is_open = self.popup.active;
         let was_open = self.popup.active;
 
@@ -248,17 +244,47 @@ impl HexViewerApp {
             return;
         };
 
+        let blocking = popup_type.is_blocking();
+
+        if blocking {
+            // Collect input events via the modal blocker
+            egui::Area::new(egui::Id::from("modal_blocker"))
+                .order(egui::Order::Background)
+                .fixed_pos(content_rect.left_top())
+                .show(ctx, |ui| {
+                    ui.allocate_rect(content_rect, egui::Sense::click());
+                    *self.events.borrow_mut() = collect_ui_events(ui);
+                });
+
+            // Darken the background
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("modal_bg"),
+            ));
+            painter.rect_filled(content_rect, 0.0, colors::SHADOW);
+        } else {
+            // Non-blocking: collect events from context directly
+            *self.events.borrow_mut() = collect_ui_events_ctx(ctx);
+        }
+
         // Display the pop-up
-        let window = egui::Window::new(popup_type.title())
+        let mut window = egui::Window::new(popup_type.title())
             .open(&mut is_open)
             .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
+            .resizable(false);
+
+        if blocking {
+            window = window.anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
+        } else {
+            window = window
+                .default_pos(content_rect.center() - egui::vec2(100.0, 50.0))
+                .movable(true);
+        }
 
         // Track OK button or Enter press
         let mut close_confirm = false;
 
-        window.show(ctx, |ui| match popup_type {
+        let popup_response = window.show(ctx, |ui| match popup_type {
             PopupType::Error => {
                 let error = self.error.borrow().clone().unwrap_or_default();
                 close_confirm = Self::display_error(ui, &error);
@@ -269,99 +295,103 @@ impl HexViewerApp {
             PopupType::InsertRange => close_confirm = self.display_insert_range(ui),
         });
 
+        self.popup.interacting = popup_response
+            .as_ref()
+            .is_some_and(|r| r.response.hovered() || r.response.dragged());
+
         self.popup.active = !close_confirm && is_open && !self.events.borrow().escape_pressed;
 
         // If the window got closed this frame
         if was_open && !self.popup.active {
-            *self.error.borrow_mut() = None;
+            self.handle_popup_close(close_confirm);
+        }
+    }
 
-            // If the pop-up closed was readdr -> relocate bytes and do some cleanup
-            if self.popup.ptype == Some(PopupType::ReAddr) && close_confirm {
-                let addr = usize::from_str_radix(&self.popup.text_input_1, 16).unwrap_or_default();
+    /// Execute the action associated with the popup that was just closed.
+    fn handle_popup_close(&mut self, close_confirm: bool) {
+        *self.error.borrow_mut() = None;
 
-                // Clear text field
-                self.popup.text_input_1.clear();
+        if self.popup.ptype == Some(PopupType::ReAddr) && close_confirm {
+            self.close_readdr();
+        } else if self.popup.ptype == Some(PopupType::InsertRange) && close_confirm {
+            self.close_insert_range();
+        } else if let Some(PopupType::Merge(path)) = self.popup.ptype.take()
+            && close_confirm
+        {
+            self.close_merge(&path);
+        }
 
-                if let Some(curr_session) = self.get_curr_session_mut() {
-                    // Re-address the IntelHex
-                    match curr_session.ih.relocate(addr) {
-                        Ok(()) => {}
-                        Err(err) => {
-                            self.popup.clear();
-                            self.error.borrow_mut().replace(err.to_string());
-                            return;
-                        }
-                    }
+        self.popup.clear();
+    }
 
-                    // Re-calculate address range
-                    curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                        ..=curr_session.ih.get_max_addr().unwrap_or(0);
+    /// Perform re-addressing and close the 'Re-address' pop-up
+    fn close_readdr(&mut self) {
+        let addr = usize::from_str_radix(&self.popup.text_input_1, 16).unwrap_or_default();
+        self.popup.text_input_1.clear();
 
-                    // Redo search
-                    curr_session.search.redo();
-                }
-            }
-            // If the pop-up closed was insert range -> insert new address range
-            else if self.popup.ptype == Some(PopupType::InsertRange) && close_confirm {
-                let start_addr = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
-                let end_addr = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
+        let Some(curr_session) = self.get_curr_session_mut() else {
+            return;
+        };
 
-                // Clear text fields
-                self.popup.text_input_1.clear();
-                self.popup.text_input_2.clear();
-
-                if let (Some(start), Some(end)) = (start_addr, end_addr) {
-                    if let Some(curr_session) = self.get_curr_session_mut() {
-                        match curr_session.ih.write_range(start, end) {
-                            Ok(()) => {
-                                // Re-calculate address range
-                                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-
-                                // Redo search
-                                curr_session.search.redo();
-                            }
-                            Err(err) => {
-                                self.popup.clear();
-                                self.error.borrow_mut().replace(err.to_string());
-                                return;
-                            }
-                        }
-                    }
-                } else {
-                    self.popup.clear();
-                    self.error
-                        .borrow_mut()
-                        .replace("Invalid address format".to_string());
-                    return;
-                }
-            }
-            // If the pop-up closed was merge -> merge ih instances and do some cleanup
-            else if let Some(PopupType::Merge(path)) = self.popup.ptype.take()
-                && close_confirm
-            {
-                // Parse addresses from text fields. Set to None if the field is empty.
-                let addr1 = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
-                let addr2 = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
-
-                // Clear text fields
-                self.popup.text_input_1.clear();
-                self.popup.text_input_2.clear();
-
-                // Merge the files
-                self.merge_file_into_curr_session(&path, addr1, addr2);
-
-                if let Some(curr_session) = self.get_curr_session_mut() {
-                    // Re-calculate address range
-                    curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                        ..=curr_session.ih.get_max_addr().unwrap_or(0);
-
-                    // Redo search
-                    curr_session.search.redo();
-                }
-            }
-
+        // Relocate the bytes to a new address
+        if let Err(err) = curr_session.ih.relocate(addr) {
             self.popup.clear();
+            self.error.borrow_mut().replace(err.to_string());
+            return;
+        }
+
+        // Re-calculate the address range and redo previously active search
+        curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+            ..=curr_session.ih.get_max_addr().unwrap_or(0);
+        curr_session.search.redo();
+    }
+
+    /// Insert a range of bytes into the current session and close the 'Insert Range' pop-up
+    fn close_insert_range(&mut self) {
+        let start_addr = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
+        let end_addr = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
+        self.popup.text_input_1.clear();
+        self.popup.text_input_2.clear();
+
+        let Some((start, end)) = start_addr.zip(end_addr) else {
+            self.popup.clear();
+            self.error
+                .borrow_mut()
+                .replace("Invalid address format".to_string());
+            return;
+        };
+
+        let Some(curr_session) = self.get_curr_session_mut() else {
+            return;
+        };
+
+        // Insert the range of bytes
+        if let Err(err) = curr_session.ih.write_range(start, end) {
+            self.popup.clear();
+            self.error.borrow_mut().replace(err.to_string());
+            return;
+        }
+
+        // Re-calculate the address range and redo previously active search
+        curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+            ..=curr_session.ih.get_max_addr().unwrap_or(0);
+        curr_session.search.redo();
+    }
+
+    /// Merge the selected file into the current session and close the 'Merge' pop-up
+    fn close_merge(&mut self, path: &PathBuf) {
+        let addr1 = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
+        let addr2 = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
+        self.popup.text_input_1.clear();
+        self.popup.text_input_2.clear();
+
+        self.merge_file_into_curr_session(path, addr1, addr2);
+
+        // Re-calculate the address range and redo previously active search
+        if let Some(curr_session) = self.get_curr_session_mut() {
+            curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                ..=curr_session.ih.get_max_addr().unwrap_or(0);
+            curr_session.search.redo();
         }
     }
 }

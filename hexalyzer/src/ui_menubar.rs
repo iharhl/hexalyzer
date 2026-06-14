@@ -76,6 +76,7 @@ impl HexViewerApp {
                     ui.menu_button("Edit", |ui| {
                         // READDRESS BUTTON
                         if ui.button("Relocate...").clicked()
+                            && !self.popup.active
                             && let Some(curr_session) = self.get_curr_session()
                             && curr_session.ih.size != 0
                         {
@@ -85,6 +86,7 @@ impl HexViewerApp {
 
                         // MERGE BUTTON
                         if ui.button("Merge...").clicked()
+                            && !self.popup.active
                             && let Some(curr_session) = self.get_curr_session()
                             && curr_session.ih.size != 0
                             && let Some(path) = rfd::FileDialog::new()
@@ -97,6 +99,7 @@ impl HexViewerApp {
 
                         // INSERT RANGE BUTTON
                         if ui.button("Insert Range...").clicked()
+                            && !self.popup.active
                             && let Some(curr_session) = self.get_curr_session()
                             && curr_session.ih.size != 0
                         {
@@ -169,7 +172,7 @@ impl HexViewerApp {
                     // ABOUT BUTTON
                     let about_button = ui.button("About");
 
-                    if about_button.clicked() {
+                    if about_button.clicked() && !self.popup.active {
                         self.popup.active = true;
                         self.popup.ptype = Some(PopupType::About);
                     }

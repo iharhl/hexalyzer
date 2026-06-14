@@ -76,8 +76,14 @@ impl eframe::App for HexViewerApp {
 
         self.handle_drag_and_drop(ctx);
 
-        // If pop active - show it and return (don't display the hex bytes)
-        if self.popup.active {
+        // If a blocking popup is active - show it and return (don't display the hex bytes)
+        if self.popup.active
+            && self
+                .popup
+                .ptype
+                .as_ref()
+                .is_some_and(PopupType::is_blocking)
+        {
             self.show_popup(ctx);
             return;
         }
@@ -85,6 +91,7 @@ impl eframe::App for HexViewerApp {
         // Show the content of the active session
         if let Some(index) = self.active_index {
             if let Some(curr_session) = self.sessions.get_mut(index) {
+                curr_session.selection.blocked = self.popup.interacting;
                 curr_session.show_central_panel(ctx, self.bytes_per_row);
             }
         } else {
@@ -93,6 +100,11 @@ impl eframe::App for HexViewerApp {
                     ui.label("Drop a file or click '+' to start hexing!");
                 });
             });
+        }
+
+        // Show non-blocking popups on top of everything else
+        if self.popup.active {
+            self.show_popup(ctx);
         }
     }
 }
