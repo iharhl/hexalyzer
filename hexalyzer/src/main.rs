@@ -28,7 +28,7 @@ mod ui_search;
 mod ui_sidepanel;
 mod ui_tabs;
 
-use crate::ui_popup::PopupType;
+use crate::ui_popup::PopupState;
 use app::HexViewerApp;
 use eframe::egui;
 
@@ -67,8 +67,8 @@ impl eframe::App for HexViewerApp {
         self.show_menu_bar(ctx);
 
         if self.error.borrow().is_some() {
-            self.popup.active = true;
-            self.popup.ptype = Some(PopupType::Error);
+            let msg = self.error.borrow().clone().unwrap_or_default();
+            self.popup.open(PopupState::Error(msg));
         }
 
         self.show_side_panel(ctx);
@@ -76,8 +76,14 @@ impl eframe::App for HexViewerApp {
 
         self.handle_drag_and_drop(ctx);
 
-        // If pop active - show it and return (don't display the hex bytes)
-        if self.popup.active {
+        // If a blocking popup is active - show it and return (don't display the hex bytes)
+        if self.popup.active
+            && self
+                .popup
+                .state
+                .as_ref()
+                .is_some_and(PopupState::is_blocking)
+        {
             self.show_popup(ctx);
             return;
         }
@@ -85,6 +91,8 @@ impl eframe::App for HexViewerApp {
         // Show the content of the active session
         if let Some(index) = self.active_index {
             if let Some(curr_session) = self.sessions.get_mut(index) {
+                curr_session.selection.blocked = self.popup.active;
+                curr_session.editor.blocked = self.popup.active;
                 curr_session.show_central_panel(ctx, self.bytes_per_row);
             }
         } else {
@@ -93,6 +101,11 @@ impl eframe::App for HexViewerApp {
                     ui.label("Drop a file or click '+' to start hexing!");
                 });
             });
+        }
+
+        // Show non-blocking popups on top of everything else
+        if self.popup.active {
+            self.show_popup(ctx);
         }
     }
 }

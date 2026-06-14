@@ -42,56 +42,63 @@ const fn key_to_hex_char(key: egui::Key) -> Option<char> {
     })
 }
 
-/// Collect events once per frame and return an aggregated state
+/// Collect events once per frame from an `egui::Ui` reference and return an aggregated state.
 pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
-    ui.input(|i| {
-        let mut state = EventState {
-            pointer_state: PointerState {
-                pointer_hover: i.pointer.hover_pos(),
-                pointer_down: i.pointer.primary_down(),
-            },
-            shift_down: i.modifiers.shift,
-            ..Default::default()
-        };
+    ui.input(collect_inner)
+}
 
-        // Key press events (only consider key releases)
-        for event in &i.events {
-            if let egui::Event::Key {
-                key,
-                pressed: false,
-                modifiers,
-                ..
-            } = event
+/// Collect events once per frame from an `egui::Context` reference and return an aggregated state.
+pub fn collect_ui_events_ctx(ctx: &egui::Context) -> EventState {
+    ctx.input(collect_inner)
+}
+
+fn collect_inner(i: &egui::InputState) -> EventState {
+    let mut state = EventState {
+        pointer_state: PointerState {
+            pointer_hover: i.pointer.hover_pos(),
+            pointer_down: i.pointer.primary_down(),
+        },
+        shift_down: i.modifiers.shift,
+        ..Default::default()
+    };
+
+    // Key press events (only consider key releases)
+    for event in &i.events {
+        if let egui::Event::Key {
+            key,
+            pressed: false,
+            modifiers,
+            ..
+        } = event
+        {
+            state.last_key_released = Some(*key);
+
+            // Store Enter key release directly
+            if state.last_key_released == Some(egui::Key::Enter) {
+                state.enter_released = true;
+            }
+
+            // Store arrow keys release directly
+            if matches!(
+                *key,
+                egui::Key::ArrowLeft
+                    | egui::Key::ArrowRight
+                    | egui::Key::ArrowUp
+                    | egui::Key::ArrowDown
+            ) {
+                state.arrow_key_released = Some(*key);
+            }
+
+            if !modifiers.command
+                && let Some(ch) = key_to_hex_char(*key)
             {
-                state.last_key_released = Some(*key);
-
-                // Store Enter key release directly
-                if state.last_key_released == Some(egui::Key::Enter) {
-                    state.enter_released = true;
-                }
-
-                // Store arrow keys release directly
-                if matches!(
-                    *key,
-                    egui::Key::ArrowLeft
-                        | egui::Key::ArrowRight
-                        | egui::Key::ArrowUp
-                        | egui::Key::ArrowDown
-                ) {
-                    state.arrow_key_released = Some(*key);
-                }
-
-                if !modifiers.command
-                    && let Some(ch) = key_to_hex_char(*key)
-                {
-                    state.hex_chars_released.push(ch);
-                }
+                state.hex_chars_released.push(ch);
             }
         }
+    }
 
-        // Direct query for Escape pressed this frame
-        state.escape_pressed = i.key_pressed(egui::Key::Escape);
+    // Direct query for Escape pressed this frame
+    state.escape_pressed = i.key_pressed(egui::Key::Escape);
 
-        state
-    })
+    state
 }
