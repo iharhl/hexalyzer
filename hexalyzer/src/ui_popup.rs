@@ -1,6 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::colors;
-use crate::events::{collect_ui_events, collect_ui_events_ctx};
+use crate::events::{self, collect_ui_events, collect_ui_events_ctx};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -45,7 +45,7 @@ impl PopupState {
     fn show(
         &mut self,
         ui: &mut egui::Ui,
-        events: &std::cell::RefCell<crate::events::EventState>,
+        events: &events::EventState,
     ) -> bool {
         match self {
             Self::Error(msg) => {
@@ -56,7 +56,7 @@ impl PopupState {
             Self::About => Self::show_about(ui),
             Self::ReAddr { addr: address } => {
                 Self::show_hex_field(ui, "New start address:", address);
-                ui.button(" OK ").clicked() || events.borrow().enter_released
+                ui.button(" OK ").clicked() || events.enter_released
             }
             Self::Merge {
                 addr_curr: addr_current,
@@ -73,12 +73,12 @@ impl PopupState {
                     "New start address for the selected file:\n(leave empty to not change it)",
                     addr_merge,
                 );
-                ui.button(" OK ").clicked() || events.borrow().enter_released
+                ui.button(" OK ").clicked() || events.enter_released
             }
             Self::InsertRange { start, end } => {
                 Self::show_hex_field(ui, "Start address:", start);
                 Self::show_hex_field(ui, "End address (inclusive):", end);
-                ui.button(" OK ").clicked() || events.borrow().enter_released
+                ui.button(" OK ").clicked() || events.enter_released
             }
         }
     }
@@ -154,7 +154,7 @@ impl PopupState {
                 };
 
                 if let Err(err) = curr_session.ih.relocate(addr) {
-                    app.error.borrow_mut().replace(err.to_string());
+                    app.error.replace(err.to_string());
                     return;
                 }
 
@@ -168,7 +168,6 @@ impl PopupState {
 
                 let Some((start, end)) = start_addr.zip(end_addr) else {
                     app.error
-                        .borrow_mut()
                         .replace("Invalid address format".to_string());
                     return;
                 };
@@ -178,7 +177,7 @@ impl PopupState {
                 };
 
                 if let Err(err) = curr_session.ih.write_range(start, end) {
-                    app.error.borrow_mut().replace(err.to_string());
+                    app.error.replace(err.to_string());
                     return;
                 }
 
@@ -247,13 +246,12 @@ impl HexViewerApp {
         let blocking = popup_state.is_blocking();
 
         if blocking {
-            // Collect input events via the modal blocker
+            // Block interactions
             egui::Area::new(egui::Id::from("modal_blocker"))
                 .order(egui::Order::Background)
                 .fixed_pos(content_rect.left_top())
                 .show(ctx, |ui| {
                     ui.allocate_rect(content_rect, egui::Sense::click());
-                    *self.events.borrow_mut() = collect_ui_events(ui);
                 });
 
             // Darken the background
@@ -262,9 +260,6 @@ impl HexViewerApp {
                 egui::Id::new("modal_bg"),
             ));
             painter.rect_filled(content_rect, 0.0, colors::SHADOW);
-        } else {
-            // Non-blocking: collect events from context directly
-            *self.events.borrow_mut() = collect_ui_events_ctx(ctx);
         }
 
         // Display the pop-up
@@ -288,11 +283,11 @@ impl HexViewerApp {
             close_confirm = popup_state.show(ui, &self.events);
         });
 
-        self.popup.active = !close_confirm && is_open && !self.events.borrow().escape_pressed;
+        self.popup.active = !close_confirm && is_open && !self.events.escape_pressed;
 
         // If the window got closed this frame
         if was_open && !self.popup.active {
-            *self.error.borrow_mut() = None;
+            self.error = None;
 
             if close_confirm {
                 // Take ownership of the state to run the confirm action

@@ -10,6 +10,9 @@ impl HexViewerApp {
             return;
         }
 
+        // Clone events before mutable borrow of self for session access
+        let events = self.events.clone();
+
         egui::SidePanel::left("left_panel")
             .exact_width(280.0)
             .show(ctx, |ui| {
@@ -101,7 +104,7 @@ impl HexViewerApp {
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.add_space(5.0);
-                        curr_session.show_jumpto_contents(ui);
+                        curr_session.show_jumpto_contents(ui, &events);
                         ui.add_space(5.0);
                     });
 
@@ -112,7 +115,7 @@ impl HexViewerApp {
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.add_space(5.0);
-                        curr_session.show_search_contents(ui);
+                        curr_session.show_search_contents(ui, &events);
                         ui.add_space(5.0);
                     });
 

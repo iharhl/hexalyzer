@@ -59,7 +59,7 @@ impl HexViewerApp {
                                 SaveFormat::Hex => curr_session.ih.write_hex(path),
                             };
                             if let Err(msg) = res {
-                                self.error.borrow_mut().replace(msg.to_string());
+                                self.error = Some(msg.to_string());
                             }
                         }
 
