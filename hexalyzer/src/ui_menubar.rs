@@ -1,5 +1,5 @@
 use crate::HexViewerApp;
-use crate::ui_popup::PopupType;
+use crate::ui_popup::PopupState;
 use eframe::egui;
 
 enum SaveFormat {
@@ -80,8 +80,9 @@ impl HexViewerApp {
                             && let Some(curr_session) = self.get_curr_session()
                             && curr_session.ih.size != 0
                         {
-                            self.popup.active = true;
-                            self.popup.ptype = Some(PopupType::ReAddr);
+                            self.popup.open(PopupState::ReAddr {
+                                addr: String::new(),
+                            });
                         }
 
                         // MERGE BUTTON
@@ -93,8 +94,11 @@ impl HexViewerApp {
                                 .set_title("Merge with File")
                                 .pick_file()
                         {
-                            self.popup.active = true;
-                            self.popup.ptype = Some(PopupType::Merge(path));
+                            self.popup.open(PopupState::Merge {
+                                path,
+                                addr_curr: String::new(),
+                                addr_merge: String::new(),
+                            });
                         }
 
                         // INSERT RANGE BUTTON
@@ -103,8 +107,10 @@ impl HexViewerApp {
                             && let Some(curr_session) = self.get_curr_session()
                             && curr_session.ih.size != 0
                         {
-                            self.popup.active = true;
-                            self.popup.ptype = Some(PopupType::InsertRange);
+                            self.popup.open(PopupState::InsertRange {
+                                start: String::new(),
+                                end: String::new(),
+                            });
                         }
 
                         // RESTORE BUTTON
@@ -173,8 +179,7 @@ impl HexViewerApp {
                     let about_button = ui.button("About");
 
                     if about_button.clicked() && !self.popup.active {
-                        self.popup.active = true;
-                        self.popup.ptype = Some(PopupType::About);
+                        self.popup.open(PopupState::About);
                     }
                 });
             });

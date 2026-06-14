@@ -11,6 +11,8 @@ pub struct ByteEdit {
     pub(crate) addr: Option<[usize; 2]>,
     /// Tracks the modified bytes by storing addresses and original values before modification
     pub(crate) modified: HashMap<usize, u8>,
+    /// When `true`, `update_edit_buffer` is a no-op. In-progress edit is cleared.
+    pub(crate) blocked: bool,
 }
 
 impl ByteEdit {
@@ -26,6 +28,13 @@ impl HexSession {
     /// Update edit buffer used for temporary storage of user key inputs
     /// during byte editing process
     pub(crate) fn update_edit_buffer(&mut self, typed_chars: &[char]) {
+        if self.editor.blocked {
+            if self.editor.in_progress {
+                self.editor.clear();
+            }
+            return;
+        }
+
         for &ch in typed_chars {
             if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
             {

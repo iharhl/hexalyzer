@@ -4,76 +4,86 @@ use crate::events::{collect_ui_events, collect_ui_events_ctx};
 use eframe::egui;
 use std::path::PathBuf;
 
-//  ========================== Popup Type logic ============================= //
+//  ========================== Popup State =================================== //
 
-#[derive(Clone, PartialEq, Eq)]
-pub enum PopupType {
-    Error,
+#[derive(Debug)]
+pub enum PopupState {
+    Error(String),
     About,
-    ReAddr,
-    Merge(PathBuf),
-    InsertRange,
+    ReAddr {
+        addr: String,
+    },
+    Merge {
+        path: PathBuf,
+        addr_curr: String,
+        addr_merge: String,
+    },
+    InsertRange {
+        start: String,
+        end: String,
+    },
 }
 
-impl PopupType {
-    pub const fn title(&self) -> &'static str {
+impl PopupState {
+    pub(crate) const fn title(&self) -> &'static str {
         match self {
-            Self::Error => "Error",
+            Self::Error(_) => "Error",
             Self::About => "About",
-            Self::ReAddr => "Re-Address",
-            Self::Merge(_) => "Merge",
-            Self::InsertRange => "Insert Range",
+            Self::ReAddr { .. } => "Re-Address",
+            Self::Merge { .. } => "Merge",
+            Self::InsertRange { .. } => "Insert Range",
         }
     }
 
     /// Returns `true` if this popup type should block interaction with the
     /// rest of the application.
-    pub const fn is_blocking(&self) -> bool {
-        matches!(self, Self::Error)
-    }
-}
-
-//  ========================== Popup logic =================================== //
-
-#[derive(Default)]
-pub struct Popup {
-    /// Is there a pop-up
-    pub(crate) active: bool,
-    /// Type of the pop-up. Used to determine the title and content of the window.
-    pub(crate) ptype: Option<PopupType>,
-    /// First text field content in the pop-up, if present
-    text_input_1: String,
-    /// Second text field content in the pop-up, if present
-    text_input_2: String,
-    /// Whether the popup window is being hovered or dragged, used to suppress
-    /// selection interaction in the `CentralPanel`.
-    pub(crate) interacting: bool,
-}
-
-impl Popup {
-    /// Clear (aka remove) the pop-up
-    pub fn clear(&mut self) {
-        self.active = false;
-        self.ptype = None;
-        self.interacting = false;
-    }
-}
-
-//  ========================== HexViewer logic ============================= //
-
-impl HexViewerApp {
-    fn display_error(ui: &mut egui::Ui, msg: &str) -> bool {
-        ui.label(msg);
-
-        // Add space before close button
-        ui.add_space(10.0);
-
-        // Keep the window open
-        false
+    pub(crate) const fn is_blocking(&self) -> bool {
+        matches!(self, Self::Error(_))
     }
 
-    /// Display the 'About' pop-up
-    fn display_about(ui: &mut egui::Ui) -> bool {
+    /// Render the popup content. Returns `true` when the user confirms (OK / Enter).
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        events: &std::cell::RefCell<crate::events::EventState>,
+    ) -> bool {
+        match self {
+            Self::Error(msg) => {
+                ui.label(msg.as_str());
+                ui.add_space(10.0);
+                false
+            }
+            Self::About => Self::show_about(ui),
+            Self::ReAddr { addr: address } => {
+                Self::show_hex_field(ui, "New start address:", address);
+                ui.button(" OK ").clicked() || events.borrow().enter_released
+            }
+            Self::Merge {
+                addr_curr: addr_current,
+                addr_merge,
+                ..
+            } => {
+                Self::show_hex_field(
+                    ui,
+                    "New start address for the current file:\n(leave empty to not change it)",
+                    addr_current,
+                );
+                Self::show_hex_field(
+                    ui,
+                    "New start address for the selected file:\n(leave empty to not change it)",
+                    addr_merge,
+                );
+                ui.button(" OK ").clicked() || events.borrow().enter_released
+            }
+            Self::InsertRange { start, end } => {
+                Self::show_hex_field(ui, "Start address:", start);
+                Self::show_hex_field(ui, "End address (inclusive):", end);
+                ui.button(" OK ").clicked() || events.borrow().enter_released
+            }
+        }
+    }
+
+    fn show_about(ui: &mut egui::Ui) -> bool {
         ui.vertical(|ui| {
             ui.add_space(5.0);
 
@@ -86,9 +96,9 @@ impl HexViewerApp {
 
             ui.label(
                 "The app is built with egui - immediate-mode GUI library. \
-            The hex parsing and writing is handled by IntelHex library, built as part of the \
-            same project.\n\nThe app does not support partial file loading so RAM usage \
-            while working with very large files will be high.",
+                 The hex parsing and writing is handled by IntelHex library, built as part of the \
+                 same project.\n\nThe app does not support partial file loading so RAM usage \
+                 while working with very large files will be high.",
             );
 
             ui.label("\nCheck out the source code on GitHub:");
@@ -108,130 +118,120 @@ impl HexViewerApp {
             ui.add_space(5.0);
         });
 
-        // Keep the window open
         false
     }
 
-    /// Display the 'Re-address' pop-up
-    fn display_readdr(&mut self, ui: &mut egui::Ui) -> bool {
+    fn show_hex_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
         ui.vertical(|ui| {
             ui.add_space(3.0);
-            ui.label("New start address:");
+            ui.label(label);
             ui.add_space(3.0);
 
-            // Add text field to enter new start address
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.popup.text_input_1)
-                    .desired_width(ui.available_width() - 70.0),
-            );
+            ui.horizontal(|ui| {
+                ui.label("0x");
 
-            // Only allow up to 8 hex digits in the text field
-            if response.changed() {
-                self.popup.text_input_1.retain(|c| c.is_ascii_hexdigit());
-                self.popup.text_input_1.truncate(8);
-            }
+                let response = ui.add(
+                    egui::TextEdit::singleline(value).desired_width(ui.available_width() - 70.0),
+                );
+
+                if response.changed() {
+                    value.retain(|c| c.is_ascii_hexdigit());
+                    value.truncate(8);
+                }
+            });
         });
 
         ui.add_space(8.0);
-
-        if ui.button(" OK ").clicked() || self.events.borrow().enter_released {
-            // Close the window
-            return true;
-        }
-
-        // Keep the window open
-        false
     }
 
-    /// Display the 'Merge' pop-up
-    fn display_merge(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.vertical(|ui| {
-            ui.add_space(3.0);
-            ui.label("New start address for the current file:\n(leave empty to not change it)");
-            ui.add_space(3.0);
+    /// Execute the action for a confirmed popup.
+    fn on_confirm(self, app: &mut HexViewerApp) {
+        match self {
+            Self::ReAddr { addr: address } => {
+                let addr = usize::from_str_radix(&address, 16).unwrap_or_default();
+                let Some(curr_session) = app.get_curr_session_mut() else {
+                    return;
+                };
 
-            // Add text field to enter new start address
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.popup.text_input_1)
-                    .desired_width(ui.available_width() - 70.0),
-            );
+                if let Err(err) = curr_session.ih.relocate(addr) {
+                    app.error.borrow_mut().replace(err.to_string());
+                    return;
+                }
 
-            // Only allow up to 8 hex digits in the text field
-            if response.changed() {
-                self.popup.text_input_1.retain(|c| c.is_ascii_hexdigit());
-                self.popup.text_input_1.truncate(8);
+                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
+                curr_session.search.redo();
             }
+            Self::InsertRange { start, end } => {
+                let start_addr = usize::from_str_radix(&start, 16).ok();
+                let end_addr = usize::from_str_radix(&end, 16).ok();
 
-            // Repeat the same for the file selected for merging
-            ui.add_space(3.0);
-            ui.label("New start address for the selected file:\n(leave empty to not change it)");
-            ui.add_space(3.0);
+                let Some((start, end)) = start_addr.zip(end_addr) else {
+                    app.error
+                        .borrow_mut()
+                        .replace("Invalid address format".to_string());
+                    return;
+                };
 
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.popup.text_input_2)
-                    .desired_width(ui.available_width() - 70.0),
-            );
+                let Some(curr_session) = app.get_curr_session_mut() else {
+                    return;
+                };
 
-            if response.changed() {
-                self.popup.text_input_2.retain(|c| c.is_ascii_hexdigit());
-                self.popup.text_input_2.truncate(8);
+                if let Err(err) = curr_session.ih.write_range(start, end) {
+                    app.error.borrow_mut().replace(err.to_string());
+                    return;
+                }
+
+                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
+                curr_session.search.redo();
             }
-        });
+            Self::Merge {
+                path,
+                addr_curr: addr_current,
+                addr_merge,
+            } => {
+                let addr1 = usize::from_str_radix(&addr_current, 16).ok();
+                let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
 
-        ui.add_space(8.0);
+                app.merge_file_into_curr_session(&path, addr1, addr2);
 
-        if ui.button(" OK ").clicked() || self.events.borrow().enter_released {
-            // Close the window
-            return true;
+                if let Some(curr_session) = app.get_curr_session_mut() {
+                    curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                        ..=curr_session.ih.get_max_addr().unwrap_or(0);
+                    curr_session.search.redo();
+                }
+            }
+            Self::Error(_) | Self::About => {}
         }
+    }
+}
 
-        // Keep the window open
-        false
+//  ========================== Popup container =============================== //
+
+#[derive(Default)]
+pub struct Popup {
+    pub(crate) active: bool,
+    pub(crate) state: Option<PopupState>,
+}
+
+impl Popup {
+    /// Open a new popup with the given state.
+    pub(crate) fn open(&mut self, state: PopupState) {
+        self.active = true;
+        self.state = Some(state);
     }
 
-    /// Display the 'Insert Range' pop-up
-    fn display_insert_range(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.vertical(|ui| {
-            ui.add_space(3.0);
-            ui.label("Start address:");
-            ui.add_space(3.0);
-
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.popup.text_input_1)
-                    .desired_width(ui.available_width() - 70.0),
-            );
-
-            if response.changed() {
-                self.popup.text_input_1.retain(|c| c.is_ascii_hexdigit());
-                self.popup.text_input_1.truncate(8);
-            }
-
-            ui.add_space(3.0);
-            ui.label("End address (inclusive):");
-            ui.add_space(3.0);
-
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.popup.text_input_2)
-                    .desired_width(ui.available_width() - 70.0),
-            );
-
-            if response.changed() {
-                self.popup.text_input_2.retain(|c| c.is_ascii_hexdigit());
-                self.popup.text_input_2.truncate(8);
-            }
-        });
-
-        ui.add_space(8.0);
-
-        if ui.button(" OK ").clicked() || self.events.borrow().enter_released {
-            // Close the window
-            return true;
-        }
-
-        // Keep the window open
-        false
+    /// Clear (aka remove) the popup.
+    pub(crate) fn clear(&mut self) {
+        self.active = false;
+        self.state = None;
     }
+}
 
+//  ========================== HexViewerApp ================================== //
+
+impl HexViewerApp {
     /// Show the pop-up
     pub(crate) fn show_popup(&mut self, ctx: &egui::Context) {
         let content_rect = ctx.content_rect();
@@ -239,12 +239,12 @@ impl HexViewerApp {
         let mut is_open = self.popup.active;
         let was_open = self.popup.active;
 
-        let Some(popup_type) = self.popup.ptype.clone() else {
+        let Some(popup_state) = self.popup.state.as_mut() else {
             self.popup.clear();
             return;
         };
 
-        let blocking = popup_type.is_blocking();
+        let blocking = popup_state.is_blocking();
 
         if blocking {
             // Collect input events via the modal blocker
@@ -268,7 +268,7 @@ impl HexViewerApp {
         }
 
         // Display the pop-up
-        let mut window = egui::Window::new(popup_type.title())
+        let mut window = egui::Window::new(popup_state.title())
             .open(&mut is_open)
             .collapsible(false)
             .resizable(false);
@@ -284,114 +284,24 @@ impl HexViewerApp {
         // Track OK button or Enter press
         let mut close_confirm = false;
 
-        let popup_response = window.show(ctx, |ui| match popup_type {
-            PopupType::Error => {
-                let error = self.error.borrow().clone().unwrap_or_default();
-                close_confirm = Self::display_error(ui, &error);
-            }
-            PopupType::About => close_confirm = Self::display_about(ui),
-            PopupType::ReAddr => close_confirm = self.display_readdr(ui),
-            PopupType::Merge(_) => close_confirm = self.display_merge(ui),
-            PopupType::InsertRange => close_confirm = self.display_insert_range(ui),
+        window.show(ctx, |ui| {
+            close_confirm = popup_state.show(ui, &self.events);
         });
-
-        self.popup.interacting = popup_response
-            .as_ref()
-            .is_some_and(|r| r.response.hovered() || r.response.dragged());
 
         self.popup.active = !close_confirm && is_open && !self.events.borrow().escape_pressed;
 
         // If the window got closed this frame
         if was_open && !self.popup.active {
-            self.handle_popup_close(close_confirm);
-        }
-    }
+            *self.error.borrow_mut() = None;
 
-    /// Execute the action associated with the popup that was just closed.
-    fn handle_popup_close(&mut self, close_confirm: bool) {
-        *self.error.borrow_mut() = None;
+            if close_confirm {
+                // Take ownership of the state to run the confirm action
+                if let Some(state) = self.popup.state.take() {
+                    state.on_confirm(self);
+                }
+            }
 
-        if self.popup.ptype == Some(PopupType::ReAddr) && close_confirm {
-            self.close_readdr();
-        } else if self.popup.ptype == Some(PopupType::InsertRange) && close_confirm {
-            self.close_insert_range();
-        } else if let Some(PopupType::Merge(path)) = self.popup.ptype.take()
-            && close_confirm
-        {
-            self.close_merge(&path);
-        }
-
-        self.popup.clear();
-    }
-
-    /// Perform re-addressing and close the 'Re-address' pop-up
-    fn close_readdr(&mut self) {
-        let addr = usize::from_str_radix(&self.popup.text_input_1, 16).unwrap_or_default();
-        self.popup.text_input_1.clear();
-
-        let Some(curr_session) = self.get_curr_session_mut() else {
-            return;
-        };
-
-        // Relocate the bytes to a new address
-        if let Err(err) = curr_session.ih.relocate(addr) {
             self.popup.clear();
-            self.error.borrow_mut().replace(err.to_string());
-            return;
-        }
-
-        // Re-calculate the address range and redo previously active search
-        curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-            ..=curr_session.ih.get_max_addr().unwrap_or(0);
-        curr_session.search.redo();
-    }
-
-    /// Insert a range of bytes into the current session and close the 'Insert Range' pop-up
-    fn close_insert_range(&mut self) {
-        let start_addr = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
-        let end_addr = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
-        self.popup.text_input_1.clear();
-        self.popup.text_input_2.clear();
-
-        let Some((start, end)) = start_addr.zip(end_addr) else {
-            self.popup.clear();
-            self.error
-                .borrow_mut()
-                .replace("Invalid address format".to_string());
-            return;
-        };
-
-        let Some(curr_session) = self.get_curr_session_mut() else {
-            return;
-        };
-
-        // Insert the range of bytes
-        if let Err(err) = curr_session.ih.write_range(start, end) {
-            self.popup.clear();
-            self.error.borrow_mut().replace(err.to_string());
-            return;
-        }
-
-        // Re-calculate the address range and redo previously active search
-        curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-            ..=curr_session.ih.get_max_addr().unwrap_or(0);
-        curr_session.search.redo();
-    }
-
-    /// Merge the selected file into the current session and close the 'Merge' pop-up
-    fn close_merge(&mut self, path: &PathBuf) {
-        let addr1 = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
-        let addr2 = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
-        self.popup.text_input_1.clear();
-        self.popup.text_input_2.clear();
-
-        self.merge_file_into_curr_session(path, addr1, addr2);
-
-        // Re-calculate the address range and redo previously active search
-        if let Some(curr_session) = self.get_curr_session_mut() {
-            curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                ..=curr_session.ih.get_max_addr().unwrap_or(0);
-            curr_session.search.redo();
         }
     }
 }
