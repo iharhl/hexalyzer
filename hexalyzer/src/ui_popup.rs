@@ -12,6 +12,7 @@ pub enum PopupType {
     About,
     ReAddr,
     Merge(PathBuf),
+    InsertRange,
 }
 
 impl PopupType {
@@ -21,6 +22,7 @@ impl PopupType {
             Self::About => "About",
             Self::ReAddr => "Re-Address",
             Self::Merge(_) => "Merge",
+            Self::InsertRange => "Insert Range",
         }
     }
 }
@@ -174,6 +176,48 @@ impl HexViewerApp {
         false
     }
 
+    fn display_insert_range(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.vertical(|ui| {
+            ui.add_space(3.0);
+            ui.label("Start address:");
+            ui.add_space(3.0);
+
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.popup.text_input_1)
+                    .desired_width(ui.available_width() - 70.0),
+            );
+
+            if response.changed() {
+                self.popup.text_input_1.retain(|c| c.is_ascii_hexdigit());
+                self.popup.text_input_1.truncate(8);
+            }
+
+            ui.add_space(3.0);
+            ui.label("End address (inclusive):");
+            ui.add_space(3.0);
+
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.popup.text_input_2)
+                    .desired_width(ui.available_width() - 70.0),
+            );
+
+            if response.changed() {
+                self.popup.text_input_2.retain(|c| c.is_ascii_hexdigit());
+                self.popup.text_input_2.truncate(8);
+            }
+        });
+
+        ui.add_space(8.0);
+
+        if ui.button(" OK ").clicked() || self.events.borrow().enter_released {
+            // Close the window
+            return true;
+        }
+
+        // Keep the window open
+        false
+    }
+
     /// Show the pop-up
     pub(crate) fn show_popup(&mut self, ctx: &egui::Context) {
         let content_rect = ctx.content_rect();
@@ -222,6 +266,7 @@ impl HexViewerApp {
             PopupType::About => close_confirm = Self::display_about(ui),
             PopupType::ReAddr => close_confirm = self.display_readdr(ui),
             PopupType::Merge(_) => close_confirm = self.display_merge(ui),
+            PopupType::InsertRange => close_confirm = self.display_insert_range(ui),
         });
 
         self.popup.active = !close_confirm && is_open && !self.events.borrow().escape_pressed;
@@ -254,6 +299,41 @@ impl HexViewerApp {
 
                     // Redo search
                     curr_session.search.redo();
+                }
+            }
+            // If the pop-up closed was insert range -> insert new address range
+            else if self.popup.ptype == Some(PopupType::InsertRange) && close_confirm {
+                let start_addr = usize::from_str_radix(&self.popup.text_input_1, 16).ok();
+                let end_addr = usize::from_str_radix(&self.popup.text_input_2, 16).ok();
+
+                // Clear text fields
+                self.popup.text_input_1.clear();
+                self.popup.text_input_2.clear();
+
+                if let (Some(start), Some(end)) = (start_addr, end_addr) {
+                    if let Some(curr_session) = self.get_curr_session_mut() {
+                        match curr_session.ih.write_range(start, end) {
+                            Ok(()) => {
+                                // Re-calculate address range
+                                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
+
+                                // Redo search
+                                curr_session.search.redo();
+                            }
+                            Err(err) => {
+                                self.popup.clear();
+                                self.error.borrow_mut().replace(err.to_string());
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    self.popup.clear();
+                    self.error
+                        .borrow_mut()
+                        .replace("Invalid address format".to_string());
+                    return;
                 }
             }
             // If the pop-up closed was merge -> merge ih instances and do some cleanup

@@ -95,6 +95,15 @@ impl HexViewerApp {
                             self.popup.ptype = Some(PopupType::Merge(path));
                         }
 
+                        // INSERT RANGE BUTTON
+                        if ui.button("Insert Range...").clicked()
+                            && let Some(curr_session) = self.get_curr_session()
+                            && curr_session.ih.size != 0
+                        {
+                            self.popup.active = true;
+                            self.popup.ptype = Some(PopupType::InsertRange);
+                        }
+
                         // RESTORE BUTTON
                         if ui.button("Restore byte changes").clicked()
                             && let Some(curr_session) = self.get_curr_session_mut()
