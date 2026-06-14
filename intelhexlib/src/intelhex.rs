@@ -37,6 +37,72 @@ impl Default for IntelHex {
     }
 }
 
+/// Iterator over individual bytes in an address range of the `IntelHex` buffer.
+///
+/// Yields `Some(byte)` for addresses that contain data, `None` for gaps. This mirrors
+/// the behavior of [`IntelHex::read_range_safe`] but without allocating a `Vec`.
+pub struct IterRange<'a> {
+    /// Reference to the sparse buffer that stores contiguous data chunks.
+    buffer: &'a BTreeMap<usize, Vec<u8>>,
+    /// Next address to yield. Advances by 1 on each `next()` call.
+    cur_addr: usize,
+    /// One-past-the-end address. The iterator stops when `cur_addr >= end_addr`.
+    end_addr: usize,
+    /// Cached reference to the chunk we're currently iterating through.
+    /// Avoids repeated `BTreeMap::range` lookups for contiguous data.
+    /// Set to `None` when we advance past the chunk's end or enter a gap.
+    current_chunk: Option<(usize, &'a Vec<u8>)>,
+}
+
+impl Iterator for IterRange<'_> {
+    type Item = Option<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Iterator is exhausted once we've covered the entire address range
+        if self.cur_addr >= self.end_addr {
+            return None;
+        }
+
+        let addr = self.cur_addr;
+        self.cur_addr += 1;
+
+        // Fast path: check if the current address falls within the cached chunk.
+        // This avoids a BTreeMap lookup for consecutive addresses in the same chunk.
+        if let Some((chunk_start, chunk_data)) = self.current_chunk {
+            let chunk_end = chunk_start + chunk_data.len();
+            if addr >= chunk_start && addr < chunk_end {
+                return Some(Some(chunk_data[addr - chunk_start]));
+            }
+            // We've moved past the end of this chunk - invalidate the cache
+            if addr >= chunk_end {
+                self.current_chunk = None;
+            }
+        }
+
+        // Slow path: look up which chunk (if any) contains this address.
+        // `range(..=addr).next_back()` finds the chunk with the highest start
+        // address that is <= addr - i.e., the chunk that might contain addr.
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=addr).next_back() {
+            let chunk_end = chunk_start + chunk_data.len();
+            if addr >= chunk_start && addr < chunk_end {
+                // Cache this chunk for subsequent fast-path lookups
+                self.current_chunk = Some((chunk_start, chunk_data));
+                return Some(Some(chunk_data[addr - chunk_start]));
+            }
+        }
+
+        // Address falls in a gap between (or before/after) chunks
+        Some(None)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.end_addr - self.cur_addr;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for IterRange<'_> {}
+
 /// Borrowing iterator over (address, data chunk) pairs in the `BTreeMap` buffer of the `IntelHex`.
 /// Replicates the structure of the internal buffer and has the highest performance.
 impl<'a> IntoIterator for &'a IntelHex {
@@ -173,7 +239,7 @@ impl IntelHex {
     }
 
     #[allow(clippy::too_many_lines)]
-    /// Parse the raw contents of the hex file and fill internal record vector.
+    /// Parse the raw contents of the hex file and fill internal buffer.
     ///
     /// # Errors
     /// - Returns an error if the record is corrupted
@@ -689,6 +755,8 @@ impl IntelHex {
     /// Read a range of bytes, returning a `Vec<Option<u8>>`.
     /// Each element is `Some(byte)` if data exists at that address, or `None` if it is a gap.
     ///
+    /// For a non-allocating alternative, see [`iter_range`](Self::iter_range).
+    ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
@@ -746,6 +814,31 @@ impl IntelHex {
         }
 
         result
+    }
+
+    /// Returns a borrowing iterator over individual bytes in the given address range.
+    ///
+    /// Yields `Some(byte)` for addresses that contain data, `None` for gaps.
+    /// This is the iterator equivalent of [`read_range_safe`] which avoids heap
+    /// allocation.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// let ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
+    /// let bytes: Vec<Option<u8>> = ih.iter_range(0x0, 5).collect();
+    ///
+    /// assert_eq!(bytes, &[Some(0xFA), Some(0x00), Some(0x00), Some(0x02), None]);
+    /// ```
+    #[must_use]
+    pub const fn iter_range(&self, start_addr: usize, len: usize) -> IterRange<'_> {
+        IterRange {
+            buffer: &self.buffer,
+            cur_addr: start_addr,
+            end_addr: start_addr + len,
+            current_chunk: None,
+        }
     }
 
     #[allow(clippy::option_if_let_else)]
@@ -1325,6 +1418,119 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::needless_collect)]
+    fn test_iter_range_valid() {
+        // Arrange: single contiguous chunk
+        let mut ih = IntelHex::new();
+        let addr_start = 16;
+        let length = 10;
+        let data: Vec<u8> = (addr_start..addr_start + length).map(|a| a as u8).collect();
+        ih.buffer.insert(addr_start, data.clone());
+
+        // Act
+        let result: Vec<Option<u8>> = ih.iter_range(addr_start, length).collect();
+
+        // Assert
+        assert_eq!(result, data.iter().map(|&b| Some(b)).collect::<Vec<_>>());
+
+        // Arrange: two chunks with a gap between them
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x00, vec![0xFA, 0x00, 0x00, 0x02]);
+        ih2.buffer.insert(0x10, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+
+        // Act
+        let result: Vec<Option<u8>> = ih2.iter_range(0x00, 0x14).collect();
+
+        // Assert: range spanning both chunks yields None for the gap
+        let expected: Vec<Option<u8>> = vec![
+            Some(0xFA),
+            Some(0x00),
+            Some(0x00),
+            Some(0x02), // chunk A
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None, // gap
+            Some(0xAA),
+            Some(0xBB),
+            Some(0xCC),
+            Some(0xDD), // chunk B
+        ];
+        assert_eq!(result, expected);
+
+        // Act
+        let safe_result: Vec<Option<u8>> = ih2.read_range_safe(0x00, 0x14);
+
+        // Assert: consistency with read_range_safe
+        assert_eq!(result, safe_result);
+
+        // Act
+        let result: Vec<Option<u8>> = ih2.iter_range(0x00, 0).collect();
+
+        // Assert: zero-length range yields nothing
+        assert!(result.is_empty());
+
+        // Act
+        let result: Vec<Option<u8>> = ih2.iter_range(0x10, 4).collect();
+
+        // Assert: range exactly matching a chunk
+        assert_eq!(result, vec![Some(0xAA), Some(0xBB), Some(0xCC), Some(0xDD)]);
+
+        // Act
+        let result: Vec<Option<u8>> = ih2.iter_range(0x00, 6).collect();
+
+        // Assert: range starting before first chunk
+        assert_eq!(
+            result,
+            vec![Some(0xFA), Some(0x00), Some(0x00), Some(0x02), None, None]
+        );
+
+        // Act + Assert: ExactSizeIterator::len() is correct
+        let mut iter = ih2.iter_range(0x00, 0x14);
+        assert_eq!(iter.len(), 0x14);
+        iter.next();
+        assert_eq!(iter.len(), 0x13);
+        for _ in iter.by_ref().take(5) {}
+        assert_eq!(iter.len(), 0x14 - 6);
+    }
+
+    #[test]
+    fn test_iter_range_invalid() {
+        // Arrange: single contiguous chunk
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x10, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+
+        // Act
+        let result: Vec<Option<u8>> = ih.iter_range(0x00, 4).collect();
+
+        // Assert: range entirely outside any chunk yields all None
+        assert_eq!(result, vec![None, None, None, None]);
+
+        // Act
+        let result: Vec<Option<u8>> = ih.iter_range(0x20, 3).collect();
+
+        // Assert: range after all chunks
+        assert_eq!(result, vec![None, None, None]);
+
+        // Arrange: empty buffer
+        let ih_empty = IntelHex::new();
+
+        // Act
+        let result: Vec<Option<u8>> = ih_empty.iter_range(0x00, 5).collect();
+
+        // Assert: empty buffer yields all None
+        assert_eq!(result, vec![None, None, None, None, None]);
+    }
+
+    #[test]
     fn test_update_byte_valid() {
         // Arrange
         let mut ih = IntelHex::new();
@@ -1421,7 +1627,6 @@ mod tests {
 
         let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
 
-        // todo: fail
         for addr in addr_start..=addr_start + length {
             update_map.push((addr, (addr - 1) as u8));
             ih.buffer.insert(addr, vec![addr as u8]);
