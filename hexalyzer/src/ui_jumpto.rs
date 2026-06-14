@@ -61,7 +61,9 @@ impl HexSession {
             self.jump_to.addr = usize::from_str_radix(&self.jump_to.input, 16).ok();
 
             // Select the byte we just jumped to
-            if let Some(addr) = self.jump_to.addr {
+            if let Some(addr) = self.jump_to.addr
+                && self.ih.read_byte(addr).is_some()
+            {
                 self.selection.update(addr);
             }
         }
