@@ -18,6 +18,7 @@ mod loader;
 mod selection;
 mod ui_button;
 mod ui_centralpanel;
+mod ui_converter;
 mod ui_filedrop;
 mod ui_inspector;
 mod ui_jumpto;
@@ -67,6 +68,9 @@ impl eframe::App for HexViewerApp {
         self.handle_copy_shortcut(ctx);
 
         self.show_menu_bar(ctx);
+
+        // Render converter tool window if opened
+        self.converter.show(ctx);
 
         if self.error.is_some() {
             let msg = self.error.clone().unwrap_or_default();

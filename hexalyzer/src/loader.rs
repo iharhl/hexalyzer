@@ -166,7 +166,9 @@ impl HexViewerApp {
                 }
 
                 if let Some(old_start_addr) = old_start_addr {
-                    cur_session.editor.remap_modified(new_start_addr, old_start_addr);
+                    cur_session
+                        .editor
+                        .remap_modified(new_start_addr, old_start_addr);
                 }
             }
 

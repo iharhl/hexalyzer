@@ -32,6 +32,7 @@ impl HexViewerApp {
                     self.file_menu(ui);
                     self.edit_menu(ui);
                     self.view_menu(ui);
+                    self.tools_menu(ui);
                     self.about_button(ui);
                 });
             });
@@ -197,6 +198,14 @@ impl HexViewerApp {
             ui.radio_value(&mut self.bytes_per_row, 16, "16 bytes");
             ui.add_space(1.0);
             ui.radio_value(&mut self.bytes_per_row, 32, "32 bytes");
+        });
+    }
+
+    fn tools_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Tools", |ui| {
+            if ui.button("Hex Converter").clicked() {
+                self.converter.active = true;
+            }
         });
     }
 

@@ -1,6 +1,7 @@
 use crate::byteedit::ByteEdit;
 use crate::events::EventState;
 use crate::selection::Selection;
+use crate::ui_converter::HexConverter;
 use crate::ui_jumpto::JumpTo;
 use crate::ui_popup::Popup;
 use crate::ui_search::Search;
@@ -68,6 +69,9 @@ pub struct HexViewerApp {
     /// Whether the side panel is expanded or collapsed
     pub side_panel_expanded: bool,
 
+    /// Hex/Dec/Bin/ASCII converter tool
+    pub converter: HexConverter,
+
     // -- UI states
     /// Per-frame state of user inputs
     pub events: EventState,
@@ -102,6 +106,7 @@ impl Default for HexViewerApp {
             max_tabs: 5,
             bytes_per_row: 16,
             popup: Popup::default(),
+            converter: HexConverter::default(),
             next_scroll_id: 1,
             side_panel_expanded: true,
             events: EventState::default(),
