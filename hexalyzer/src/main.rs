@@ -18,6 +18,7 @@ mod loader;
 mod selection;
 mod ui_button;
 mod ui_centralpanel;
+mod ui_converter;
 mod ui_filedrop;
 mod ui_inspector;
 mod ui_jumpto;
@@ -62,12 +63,17 @@ impl eframe::App for HexViewerApp {
             // ctx.set_debug_on_hover(true);
         }
 
+        // Collect input events once per frame
+        self.events = events::collect_ui_events_ctx(ctx);
         self.handle_copy_shortcut(ctx);
 
         self.show_menu_bar(ctx);
 
-        if self.error.borrow().is_some() {
-            let msg = self.error.borrow().clone().unwrap_or_default();
+        // Render converter tool window if opened
+        self.converter.show(ctx);
+
+        if self.error.is_some() {
+            let msg = self.error.clone().unwrap_or_default();
             self.popup.open(PopupState::Error(msg));
         }
 
@@ -93,7 +99,7 @@ impl eframe::App for HexViewerApp {
             if let Some(curr_session) = self.sessions.get_mut(index) {
                 curr_session.selection.blocked = self.popup.active;
                 curr_session.editor.blocked = self.popup.active;
-                curr_session.show_central_panel(ctx, self.bytes_per_row);
+                curr_session.show_central_panel(ctx, self.bytes_per_row, &self.events);
             }
         } else {
             egui::CentralPanel::default().show(ctx, |ui| {

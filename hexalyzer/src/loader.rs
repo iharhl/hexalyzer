@@ -57,9 +57,7 @@ impl HexViewerApp {
 
         // Prevent loading more files than allowed by the app settings
         if self.sessions.len() >= self.max_tabs {
-            self.error
-                .borrow_mut()
-                .replace("Maximum number of tabs reached".into());
+            self.error = Some("Maximum number of tabs reached".into());
             return;
         }
 
@@ -68,7 +66,7 @@ impl HexViewerApp {
         let file_type = match detect_file_kind(path) {
             Ok(kind) => kind,
             Err(err) => {
-                self.error.borrow_mut().replace(err.to_string());
+                self.error = Some(err.to_string());
                 return;
             }
         };
@@ -85,7 +83,7 @@ impl HexViewerApp {
         };
 
         if let Err(msg) = res {
-            self.error.borrow_mut().replace(msg);
+            self.error = Some(msg);
             return;
         }
 
@@ -93,7 +91,7 @@ impl HexViewerApp {
         let last_modified = match get_last_modified(path) {
             Ok(time) => time,
             Err(err) => {
-                self.error.borrow_mut().replace(err.to_string());
+                self.error = Some(err.to_string());
                 return;
             }
         };
@@ -109,8 +107,6 @@ impl HexViewerApp {
             ),
             last_modified,
             scroll_id,
-            events: self.events.clone(), // clone the pointer
-            error: self.error.clone(),   // clone the pointer
             ..HexSession::default()
         };
 
@@ -137,12 +133,12 @@ impl HexViewerApp {
         }
     }
 
-    /// Merges the content of a file into the current IntelHex session.
+    /// Merges the content of a file into the current `IntelHex` session.
     ///
     /// # Parameters
     /// - `path`: Reference to a `PathBuf` that represents the path of the file to be merged.
-    /// - `addr1`: Optional start address to which the current session’s IntelHex instance should be relocated.
-    /// - `addr2`: Optional start address to which the contents of the new file should be relocated.
+    /// - `addr1`: Optional start addr to which the current session's `IntelHex` instance should be relocated.
+    /// - `addr2`: Optional start addr to which the contents of the new file should be relocated.
     pub(crate) fn merge_file_into_curr_session(
         &mut self,
         path: &PathBuf,
@@ -153,18 +149,26 @@ impl HexViewerApp {
             let file_type = match detect_file_kind(path) {
                 Ok(kind) => kind,
                 Err(err) => {
-                    self.error.borrow_mut().replace(err.to_string());
+                    self.error = Some(err.to_string());
                     return;
                 }
             };
 
             // Relocate the current file to a new start address
             if let Some(new_start_addr) = addr1 {
+                let old_start_addr = cur_session.ih.get_min_addr();
+
                 let res = cur_session.ih.relocate(new_start_addr);
 
                 if let Err(msg) = res {
-                    self.error.borrow_mut().replace(msg.to_string());
+                    self.error = Some(msg.to_string());
                     return;
+                }
+
+                if let Some(old_start_addr) = old_start_addr {
+                    cur_session
+                        .editor
+                        .remap_modified(new_start_addr, old_start_addr);
                 }
             }
 
@@ -178,7 +182,7 @@ impl HexViewerApp {
             };
 
             if let Err(msg) = res {
-                self.error.borrow_mut().replace(msg);
+                self.error = Some(msg);
                 return;
             }
 
@@ -187,7 +191,7 @@ impl HexViewerApp {
                 let res = new_ih.relocate(new_start_addr);
 
                 if let Err(msg) = res {
-                    self.error.borrow_mut().replace(msg.to_string());
+                    self.error = Some(msg.to_string());
                     return;
                 }
             }
@@ -195,9 +199,7 @@ impl HexViewerApp {
             // Merge the two IntelHex instances
             cur_session.ih.merge(&new_ih);
         } else {
-            self.error
-                .borrow_mut()
-                .replace("Could not get current hex session".to_string());
+            self.error = Some("Could not get current hex session".to_string());
         }
     }
 }

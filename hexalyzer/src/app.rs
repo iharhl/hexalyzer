@@ -1,13 +1,12 @@
 use crate::byteedit::ByteEdit;
 use crate::events::EventState;
 use crate::selection::Selection;
+use crate::ui_converter::HexConverter;
 use crate::ui_jumpto::JumpTo;
 use crate::ui_popup::Popup;
 use crate::ui_search::Search;
 use intelhexlib::IntelHex;
-use std::cell::RefCell;
 use std::ops::RangeInclusive;
-use std::rc::Rc;
 
 pub mod colors {
     use eframe::egui::Color32;
@@ -52,13 +51,6 @@ pub struct HexSession {
     pub file_changed_on_disk: bool,
     /// Scroll id that allows each tab to keep its own scroll position
     pub scroll_id: usize,
-
-    // -- Shared UI states
-    /// Per-frame state of user inputs
-    pub events: Rc<RefCell<EventState>>,
-    /// Errors originating from user interaction with the session.
-    /// Currently, no such errors are defined, reserved for future use.
-    pub error: Rc<RefCell<Option<String>>>,
 }
 
 pub struct HexViewerApp {
@@ -77,11 +69,14 @@ pub struct HexViewerApp {
     /// Whether the side panel is expanded or collapsed
     pub side_panel_expanded: bool,
 
-    // -- Shared UI states
+    /// Hex/Dec/Bin/ASCII converter tool
+    pub converter: HexConverter,
+
+    // -- UI states
     /// Per-frame state of user inputs
-    pub events: Rc<RefCell<EventState>>,
+    pub events: EventState,
     /// Errors during parsing, editing, or writing `IntelHex` file
-    pub error: Rc<RefCell<Option<String>>>,
+    pub error: Option<String>,
 }
 
 impl Default for HexSession {
@@ -99,8 +94,6 @@ impl Default for HexSession {
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
             scroll_id: 0,
-            events: Rc::new(RefCell::new(EventState::default())),
-            error: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -113,10 +106,11 @@ impl Default for HexViewerApp {
             max_tabs: 5,
             bytes_per_row: 16,
             popup: Popup::default(),
+            converter: HexConverter::default(),
             next_scroll_id: 1,
             side_panel_expanded: true,
-            events: Rc::new(RefCell::new(EventState::default())),
-            error: Rc::new(RefCell::new(None)),
+            events: EventState::default(),
+            error: None,
         }
     }
 }

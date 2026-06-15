@@ -1,5 +1,5 @@
 use crate::app::{HexSession, colors};
-use crate::events;
+use crate::events::EventState;
 use crate::ui_button;
 use eframe::egui;
 use std::ops::Range;
@@ -8,7 +8,12 @@ impl HexSession {
     /// Displays the central panel of the UI for rendering the hex editor content.
     /// This function draws the main content area of the application. It uses the `egui::CentralPanel`
     /// to define the central region and implements a scrollable hex view with UI event handling.
-    pub(crate) fn show_central_panel(&mut self, ctx: &egui::Context, bytes_per_row: usize) {
+    pub(crate) fn show_central_panel(
+        &mut self,
+        ctx: &egui::Context,
+        bytes_per_row: usize,
+        events: &EventState,
+    ) {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Align to 0x10 so every printed row address ends with '0'
             const ROW_ADDR_ALIGN: usize = 0x10;
@@ -29,11 +34,8 @@ impl HexSession {
                 font_height,
                 total_rows,
                 |ui, row_range| {
-                    // Collect input events once per frame and store in the app state
-                    *self.events.borrow_mut() = events::collect_ui_events(ui);
-
                     // Draw the main canvas with hex content
-                    self.draw_main_canvas(ui, row_range, bytes_per_row, display_start);
+                    self.draw_main_canvas(ui, row_range, bytes_per_row, display_start, events);
                 },
             );
         });
@@ -49,26 +51,21 @@ impl HexSession {
         row_range: Range<usize>,
         bytes_per_row: usize,
         display_start: usize,
+        events: &EventState,
     ) {
         // Get state of the mouse click from aggregated events
-        // let pointer_down = self.events.borrow().pointer_down;
-        // let pointer_hover = self.events.borrow().pointer_hover;
-        let pointer_state = self.events.borrow().pointer_state;
-        let shift_down = self.events.borrow().shift_down;
+        let pointer_state = events.pointer_state;
 
         // Detect released clicked
         if !pointer_state.pointer_down {
             self.selection.released = true;
         }
 
-        // Get state of key presses (hex chars)
-        let hex_chars = self.events.borrow().hex_chars_released.clone();
-
-        // Update byte edit buffer base on the key press
-        self.update_edit_buffer(&hex_chars);
+        // Update byte edit buffer based on the key press
+        self.update_edit_buffer(&events.hex_chars_released);
 
         // Cancel byte editing / selection on Esc press
-        if self.events.borrow().escape_pressed {
+        if events.escape_pressed {
             if !self.editor.in_progress {
                 self.selection.clear();
             }
@@ -80,7 +77,9 @@ impl HexSession {
         let start = display_start + row_range.start * bytes_per_row;
         let end = display_start + row_range.end * bytes_per_row + bytes_per_row;
 
-        // Get bytes from the buffer for the whole area at once
+        // Get bytes from the buffer for the whole area at once.
+        // Limitation: Results in heap allocation. Cannot use `self.ih.iter_range` because it
+        // would require a borrow of `self.ih` which conflicts with the mut borrow in `draw_row`
         let bytes = self.ih.read_range_safe(start, end - start);
 
         // Draw rows
@@ -88,8 +87,7 @@ impl HexSession {
             self.draw_row(
                 ui,
                 row,
-                pointer_state,
-                shift_down,
+                events,
                 bytes_per_row,
                 display_start,
                 &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
@@ -99,7 +97,7 @@ impl HexSession {
         // Handle arrow key events
         // TODO: jump over empty bytes and up down presses
         if let Some(r) = self.selection.range.as_mut() {
-            match self.events.borrow().arrow_key_released {
+            match events.arrow_key_released {
                 Some(egui::Key::ArrowLeft) => {
                     r[0] = r[0].saturating_sub(1);
                     r[1] = r[0];
@@ -125,13 +123,14 @@ impl HexSession {
         &mut self,
         ui: &mut egui::Ui,
         row: usize,
-        pointer_state: events::PointerState,
-        shift_down: bool,
+        events: &EventState,
         bytes_per_row: usize,
         display_start: usize,
         bytes: &[Option<u8>],
     ) {
         // Get state of the mouse click
+        let pointer_state = events.pointer_state;
+        let shift_down = events.shift_down;
         let pointer_hover = pointer_state.pointer_hover;
         let pointer_down = pointer_state.pointer_down;
 

@@ -1,4 +1,5 @@
 use crate::app::HexSession;
+use crate::events::EventState;
 use eframe::egui;
 
 #[derive(Default)]
@@ -21,7 +22,7 @@ impl JumpTo {
 
 impl HexSession {
     /// Displays the `JumpTo` panel for jumping to a specific address.
-    pub(crate) fn show_jumpto_contents(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_jumpto_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
         let textedit = ui.add(
             egui::TextEdit::singleline(&mut self.jump_to.input)
                 .desired_width(ui.available_width() - 30.0),
@@ -56,11 +57,13 @@ impl HexSession {
             self.selection.clear();
         }
 
-        if self.events.borrow().enter_released && self.jump_to.has_focus {
+        if events.enter_released && self.jump_to.has_focus {
             self.jump_to.addr = usize::from_str_radix(&self.jump_to.input, 16).ok();
 
             // Select the byte we just jumped to
-            if let Some(addr) = self.jump_to.addr {
+            if let Some(addr) = self.jump_to.addr
+                && self.ih.read_byte(addr).is_some()
+            {
                 self.selection.update(addr);
             }
         }

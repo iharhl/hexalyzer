@@ -22,6 +22,30 @@ impl ByteEdit {
         self.addr = None;
         self.buffer.clear();
     }
+
+    /// Remap all addresses in the `modified` map by the offset (diff between new and old addr).
+    /// Used after operations like relocate that shift memory addresses.
+    pub(crate) fn remap_modified(&mut self, new_addr: usize, old_addr: usize) {
+        if new_addr == old_addr {
+            return;
+        }
+
+        if new_addr > old_addr {
+            let offset = new_addr - old_addr;
+            self.modified = self
+                .modified
+                .drain()
+                .map(|(addr, val)| (addr + offset, val))
+                .collect();
+        } else {
+            let offset = old_addr - new_addr;
+            self.modified = self
+                .modified
+                .drain()
+                .map(|(addr, val)| (addr - offset, val))
+                .collect();
+        }
+    }
 }
 
 impl HexSession {

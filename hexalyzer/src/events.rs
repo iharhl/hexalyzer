@@ -43,6 +43,8 @@ const fn key_to_hex_char(key: egui::Key) -> Option<char> {
 }
 
 /// Collect events once per frame from an `egui::Ui` reference and return an aggregated state.
+/// **Note**: currently unused; might be useful in the future.
+#[allow(dead_code)]
 pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
     ui.input(collect_inner)
 }
@@ -90,6 +92,7 @@ fn collect_inner(i: &egui::InputState) -> EventState {
             }
 
             if !modifiers.command
+                && !modifiers.alt
                 && let Some(ch) = key_to_hex_char(*key)
             {
                 state.hex_chars_released.push(ch);

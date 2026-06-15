@@ -1,4 +1,5 @@
 use crate::app::HexSession;
+use crate::events::EventState;
 use eframe::egui;
 
 #[derive(Default, PartialEq, Clone)]
@@ -76,7 +77,7 @@ impl Search {
 
 impl HexSession {
     /// Show content of the search menu
-    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
         // RadioButtons to select between byte and ascii search
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.search.current.mode, SearchMode::Hex, "Hex")
@@ -113,7 +114,7 @@ impl HexSession {
             self.selection.clear();
         }
 
-        if (self.events.borrow().enter_released && self.search.has_focus) || self.search.force {
+        if (events.enter_released && self.search.has_focus) || self.search.force {
             // Same input -> move to next result, otherwise -> search again
             if self.search.current == self.search.last {
                 if !self.search.results.is_empty() {
