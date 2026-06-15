@@ -149,9 +149,15 @@ impl PopupState {
                     return;
                 };
 
+                let old_start_addr = curr_session.ih.get_min_addr();
+
                 if let Err(err) = curr_session.ih.relocate(addr) {
                     app.error.replace(err.to_string());
                     return;
+                }
+
+                if let Some(old_start_addr) = old_start_addr {
+                    curr_session.editor.remap_modified(addr, old_start_addr);
                 }
 
                 curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)

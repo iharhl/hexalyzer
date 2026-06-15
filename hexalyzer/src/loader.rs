@@ -156,11 +156,17 @@ impl HexViewerApp {
 
             // Relocate the current file to a new start address
             if let Some(new_start_addr) = addr1 {
+                let old_start_addr = cur_session.ih.get_min_addr();
+
                 let res = cur_session.ih.relocate(new_start_addr);
 
                 if let Err(msg) = res {
                     self.error = Some(msg.to_string());
                     return;
+                }
+
+                if let Some(old_start_addr) = old_start_addr {
+                    cur_session.editor.remap_modified(new_start_addr, old_start_addr);
                 }
             }
 
