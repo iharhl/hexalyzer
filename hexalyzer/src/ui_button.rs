@@ -1,5 +1,8 @@
 use eframe::egui;
 
+/// Older button style for displaying bytes.
+/// Kept for future reference; not used.
+#[allow(dead_code)]
 pub fn light_mono_button(
     ui: &mut egui::Ui,
     size: egui::Vec2,

@@ -1,8 +1,7 @@
-use crate::app::{HexSession, colors};
+use crate::app::HexSession;
 use crate::events::EventState;
-use crate::ui_button;
+use crate::hexview::{HexRenderer, Viewport, VisiblePage};
 use eframe::egui;
-use std::ops::Range;
 
 impl HexSession {
     /// Displays the central panel of the UI for rendering the hex editor content.
@@ -17,16 +16,27 @@ impl HexSession {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Align to 0x10 so every printed row address ends with '0'
             const ROW_ADDR_ALIGN: usize = 0x10;
-            let align_down = |addr: usize| addr & !(ROW_ADDR_ALIGN - 1);
-            let align_up = |addr: usize| (addr + (ROW_ADDR_ALIGN - 1)) & !(ROW_ADDR_ALIGN - 1);
 
             // Get start and end addresses of the visible area. Find total rows to display.
-            let display_start = align_down(*self.addr.start());
-            let display_end = align_up((*self.addr.end()).saturating_add(1));
+            let display_start = (*self.addr.start()) & !(ROW_ADDR_ALIGN - 1);
+            let display_end = ((*self.addr.end()).saturating_add(1) + (ROW_ADDR_ALIGN - 1))
+                & !(ROW_ADDR_ALIGN - 1);
             let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
             // Get row height in pixels (depends on font size)
             let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
+
+            // Build the VisiblePage before entering the draw closure, so we
+            // avoid borrow conflicts between page_builder and other HexSession fields.
+            let mut page = VisiblePage {
+                start_addr: 0,
+                bytes_per_row,
+                row_count: 0,
+                data: Vec::new(),
+                flags: Vec::new(),
+                ascii: Vec::new(),
+                display_hex: Vec::new(),
+            };
 
             // Create a scroll area. Scroll if search or addr jump is triggered.
             self.create_step_scroll(bytes_per_row).show_rows(
@@ -34,8 +44,24 @@ impl HexSession {
                 font_height,
                 total_rows,
                 |ui, row_range| {
-                    // Draw the main canvas with hex content
-                    self.draw_main_canvas(ui, row_range, bytes_per_row, display_start, events);
+                    // Compute the visible page from model state
+                    let viewport = Viewport {
+                        display_start,
+                        first_row: row_range.start,
+                        row_count: row_range.end - row_range.start,
+                        bytes_per_row,
+                    };
+                    self.page_builder.compute(
+                        &self.ih,
+                        &viewport,
+                        &self.selection,
+                        &self.editor,
+                        &self.search,
+                        &mut page,
+                    );
+
+                    // Handle user interaction and paint
+                    self.draw_page(ui, &page, events);
                 },
             );
         });
@@ -45,18 +71,10 @@ impl HexSession {
         self.jump_to.addr = None;
     }
 
-    fn draw_main_canvas(
-        &mut self,
-        ui: &mut egui::Ui,
-        row_range: Range<usize>,
-        bytes_per_row: usize,
-        display_start: usize,
-        events: &EventState,
-    ) {
-        // Get state of the mouse click from aggregated events
+    fn draw_page(&mut self, ui: &mut egui::Ui, page: &VisiblePage, events: &EventState) {
         let pointer_state = events.pointer_state;
 
-        // Detect released clicked
+        // Detect released click
         if !pointer_state.pointer_down {
             self.selection.released = true;
         }
@@ -73,213 +91,57 @@ impl HexSession {
             self.editor.clear();
         }
 
-        // Start and end addresses of the whole visible area
-        let start = display_start + row_range.start * bytes_per_row;
-        let end = display_start + row_range.end * bytes_per_row + bytes_per_row;
+        // Paint the hex view and get interaction response
+        let response = HexRenderer::paint(ui, page);
 
-        // Get bytes from the buffer for the whole area at once.
-        // Limitation: Results in heap allocation. Cannot use `self.ih.iter_range` because it
-        // would require a borrow of `self.ih` which conflicts with the mut borrow in `draw_row`
-        let bytes = self.ih.read_range_safe(start, end - start);
+        // Handle click or drag on a hex byte
+        if let Some(addr) = response.interacted_addr
+            && self.ih.read_byte(addr).is_some()
+        {
+            self.search.loose_focus();
+            self.jump_to.loose_focus();
 
-        // Draw rows
-        for (i, row) in row_range.enumerate() {
-            self.draw_row(
-                ui,
-                row,
-                events,
-                bytes_per_row,
-                display_start,
-                &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
-            );
+            if events.shift_down {
+                self.selection.shift_update(addr);
+            } else {
+                self.selection.update(addr);
+            }
         }
 
-        // Handle arrow key events
-        // TODO: jump over empty bytes and up down presses
+        // Handle arrow key events — stop at gap boundaries.
         if let Some(r) = self.selection.range.as_mut() {
+            let bpr = page.bytes_per_row;
             match events.arrow_key_released {
                 Some(egui::Key::ArrowLeft) => {
-                    r[0] = r[0].saturating_sub(1);
-                    r[1] = r[0];
+                    let target = r[0].saturating_sub(1);
+                    if self.ih.read_byte(target).is_some() {
+                        r[0] = target;
+                        r[1] = target;
+                    }
                 }
                 Some(egui::Key::ArrowRight) => {
-                    r[0] = r[0].saturating_add(1);
-                    r[1] = r[0];
+                    let target = r[0].saturating_add(1);
+                    if self.ih.read_byte(target).is_some() {
+                        r[0] = target;
+                        r[1] = target;
+                    }
                 }
                 Some(egui::Key::ArrowUp) => {
-                    r[0] = r[0].saturating_sub(bytes_per_row);
-                    r[1] = r[0];
+                    let target = r[0].saturating_sub(bpr);
+                    if self.ih.read_byte(target).is_some() {
+                        r[0] = target;
+                        r[1] = target;
+                    }
                 }
                 Some(egui::Key::ArrowDown) => {
-                    r[0] = r[0].saturating_add(bytes_per_row);
-                    r[1] = r[0];
+                    let target = r[0].saturating_add(bpr);
+                    if self.ih.read_byte(target).is_some() {
+                        r[0] = target;
+                        r[1] = target;
+                    }
                 }
                 _ => {}
             }
-        }
-    }
-
-    fn draw_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        row: usize,
-        events: &EventState,
-        bytes_per_row: usize,
-        display_start: usize,
-        bytes: &[Option<u8>],
-    ) {
-        // Get state of the mouse click
-        let pointer_state = events.pointer_state;
-        let shift_down = events.shift_down;
-        let pointer_hover = pointer_state.pointer_hover;
-        let pointer_down = pointer_state.pointer_down;
-
-        // Start and end addresses of the current row
-        let start = display_start + row * bytes_per_row;
-        let end = start + bytes_per_row;
-
-        ui.horizontal(|ui| {
-            // Display address (fixed width, monospaced)
-            ui.monospace(format!("{start:08X}"));
-
-            // Add space before hex block
-            ui.add_space(16.0);
-
-            // Hex bytes representation row
-            for (i, addr) in (start..end).enumerate() {
-                // Remove spacing between buttons
-                ui.spacing_mut().item_spacing.x = 0.0;
-
-                // Determine is the current byte selected
-                let byte = bytes[i];
-                let is_selected = byte.is_some() && self.selection.is_addr_within_range(addr);
-
-                // Change color of every other byte for better readability
-                let bg_color = if addr % 2 == 0 {
-                    colors::GRAY_210
-                } else {
-                    colors::GRAY_160
-                };
-
-                // Determine display value of the byte
-                let display_value = if let Some(b) = byte {
-                    if is_selected && self.editor.in_progress {
-                        self.editor.buffer.clone()
-                    } else {
-                        format!("{b:02X}")
-                    }
-                } else {
-                    "--".to_string()
-                };
-
-                // Show byte as a button
-                let button = ui_button::light_mono_button(
-                    ui,
-                    egui::Vec2::new(21.0, 18.0),
-                    display_value.as_str(),
-                    bg_color,
-                );
-
-                // Update the selection range
-                if pointer_down
-                    && byte.is_some()
-                    && let Some(hover) = pointer_hover
-                    && button.rect.contains(hover)
-                {
-                    // Force text edit boxes to loose focus if selection is updated
-                    self.search.loose_focus();
-                    self.jump_to.loose_focus();
-
-                    if shift_down {
-                        self.selection.shift_update(addr);
-                    } else {
-                        self.selection.update(addr);
-                    }
-                }
-
-                // Highlight byte if selected or modified
-                self.highlight_widget(ui, &button, addr, is_selected);
-
-                // Add space every 8 bytes
-                if (addr - start + 1).is_multiple_of(8) {
-                    ui.add_space(5.0);
-                }
-            }
-
-            // Add space before ASCII row
-            ui.add_space(16.0);
-
-            // ASCII representation row
-            for (i, addr) in (start..end).enumerate() {
-                // Spacing between ascii labels
-                ui.spacing_mut().item_spacing.x = 1.0;
-
-                // Determine display char
-                let byte = bytes[i];
-                let ch = byte.map_or(' ', |b| if b.is_ascii_graphic() { b as char } else { '.' });
-
-                // Determine is char selected
-                let is_selected = byte.is_some() && self.selection.is_addr_within_range(addr);
-
-                // Show char as label
-                let label = ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(ch.to_string())
-                            .color(colors::GRAY_160)
-                            .monospace(),
-                    )
-                    .selectable(false),
-                );
-
-                // Update the selection range
-                if pointer_down
-                    && byte.is_some()
-                    && let Some(hover) = pointer_hover
-                    && label.rect.contains(hover)
-                {
-                    if shift_down {
-                        self.selection.shift_update(addr);
-                    } else {
-                        self.selection.update(addr);
-                    }
-                }
-
-                // Highlight char if selected or modified
-                self.highlight_widget(ui, &label, addr, is_selected);
-            }
-        });
-    }
-
-    fn highlight_widget(
-        &self,
-        ui: &egui::Ui,
-        widget: &egui::Response,
-        addr: usize,
-        is_selected: bool,
-    ) {
-        if is_selected {
-            // If selected -> highlight (1st prio)
-            ui.painter()
-                .rect_filled(widget.rect, 0.0, colors::LIGHT_BLUE);
-            return;
-        }
-
-        if !self.search.results.is_empty() {
-            // If search active -> highlight if inside search results (2nd prio)
-            let is_inside_match = self.search.results.iter().any(|&start| {
-                let end = start.saturating_add(self.search.length);
-                (start..end).contains(&addr)
-            });
-
-            if is_inside_match {
-                ui.painter().rect_filled(widget.rect, 0.0, colors::GREEN);
-                return;
-            }
-        }
-
-        if self.editor.modified.contains_key(&addr) {
-            // If modified -> highlight (3rd prio)
-            ui.painter().rect_filled(widget.rect, 0.0, colors::MUD);
         }
     }
 }

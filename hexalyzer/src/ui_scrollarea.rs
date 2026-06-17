@@ -44,12 +44,11 @@ impl StepScrollArea {
             top_row = top_row.saturating_add_signed(row_delta);
         }
 
-        // Make view boundary.
-        // Visible rows are not fully accurate. Had to add margin for a more consistent display.
-        let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
+        // Make view boundary
+        let full_row_size = font_height + ui.spacing().item_spacing.y;
         let visible_rows = (rect.height() / full_row_size).floor() as usize;
         // Allow 1 empty row at the bottom
-        let max_top_row = total_rows.saturating_sub(visible_rows - 1);
+        let max_top_row = total_rows.saturating_sub(visible_rows.saturating_sub(1));
         top_row = top_row.min(max_top_row);
 
         ui.data_mut(|d| d.insert_temp(self.id, top_row));

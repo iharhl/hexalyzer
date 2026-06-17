@@ -14,6 +14,7 @@ mod app;
 mod byteedit;
 mod clipboard;
 mod events;
+mod hexview;
 mod loader;
 mod selection;
 mod ui_button;

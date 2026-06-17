@@ -1,5 +1,6 @@
 use crate::byteedit::ByteEdit;
 use crate::events::EventState;
+use crate::hexview::PageBuilder;
 use crate::selection::Selection;
 use crate::ui_converter::HexConverter;
 use crate::ui_jumpto::JumpTo;
@@ -43,6 +44,8 @@ pub struct HexSession {
     pub search: Search,
     /// Handler for GUI feature to jump to selected address
     pub jump_to: JumpTo,
+    /// Cached page builder for the hex view renderer
+    pub page_builder: PageBuilder,
     /// Last modified time of the file. Used to detect file changes.
     pub last_modified: std::time::SystemTime,
     /// Last time the file modification was checked. Used to throttle `fs::metadata` calls.
@@ -90,6 +93,7 @@ impl Default for HexSession {
             selection: Selection::default(),
             search: Search::default(),
             jump_to: JumpTo::default(),
+            page_builder: PageBuilder::new(),
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,

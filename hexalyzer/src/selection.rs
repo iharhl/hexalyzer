@@ -10,17 +10,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// Check if the provided address is within the selection range
-    pub(crate) const fn is_addr_within_range(&self, addr: usize) -> bool {
-        if let Some(range) = self.range {
-            if range[0] < range[1] {
-                return range[0] <= addr && range[1] >= addr;
-            }
-            return range[1] <= addr && range[0] >= addr;
-        }
-        false
-    }
-
     /// Extend selection range with provided address
     pub(crate) fn update(&mut self, addr: usize) {
         if self.blocked {
@@ -49,5 +38,12 @@ impl Selection {
     pub(crate) const fn clear(&mut self) {
         self.range = None;
         self.released = false;
+    }
+
+    /// Get the selected address range as a normalized (min, max) tuple.
+    #[must_use]
+    pub(crate) fn get_normalized_range(&self) -> Option<(usize, usize)> {
+        self.range
+            .map(|[start, end]| (start.min(end), start.max(end)))
     }
 }
