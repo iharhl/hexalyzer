@@ -18,6 +18,8 @@ impl CellFlags {
     pub const SELECTED: Self = Self(0b0000_0001);
     pub const SEARCH_HIT: Self = Self(0b0000_0010);
     pub const MODIFIED: Self = Self(0b0000_0100);
+    /// Byte differs from a comparison source (diff view)
+    pub const DIFFERENT: Self = Self(0b0000_1000);
 
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {
@@ -61,6 +63,119 @@ pub struct VisiblePage {
 }
 
 // ---------------------------------------------------------------------------
+// PageContext
+// ---------------------------------------------------------------------------
+
+/// Overlays (selection, search, editor, diff) used when building a [`VisiblePage`].
+/// Keeps `PageBuilder` independent of `HexSession` so a diff panel can pass
+/// `diff_addrs` while reusing the same compute path.
+pub struct PageContext<'a> {
+    pub selection: &'a Selection,
+    pub editor: &'a ByteEdit,
+    pub search: &'a Search,
+    /// Addresses to mark [`CellFlags::DIFFERENT`] (e.g. from [`crate::hexdiff::DiffSet`]).
+    pub diff_addrs: Option<&'a std::collections::HashSet<usize>>,
+}
+
+impl<'a> PageContext<'a> {
+    /// Context for the standard single-file hex editor
+    #[must_use]
+    pub const fn editor(
+        selection: &'a Selection,
+        editor: &'a ByteEdit,
+        search: &'a Search,
+    ) -> Self {
+        Self {
+            selection,
+            editor,
+            search,
+            diff_addrs: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layout (shared by paint and hit-testing)
+// ---------------------------------------------------------------------------
+
+const COLUMN_GAP: f32 = 16.0;
+const HEX_GROUP_GAP: f32 = 5.0;
+const HEX_GROUP_SIZE: usize = 8;
+
+/// Column geometry shared by painting and hit-testing so both use identical math.
+pub(crate) struct HexLayout {
+    char_w: f32,
+    cell_w: f32,
+    bytes_per_row: usize,
+}
+
+impl HexLayout {
+    fn from_char_w(char_w: f32, bytes_per_row: usize) -> Self {
+        Self {
+            char_w,
+            cell_w: char_w * 3.0,
+            bytes_per_row,
+        }
+    }
+
+    const fn addr_w(&self) -> f32 {
+        self.char_w * 8.0
+    }
+
+    fn hex_x(&self, origin_x: f32) -> f32 {
+        origin_x + self.addr_w() + COLUMN_GAP
+    }
+
+    fn hex_col_w(&self) -> f32 {
+        self.cell_w * self.bytes_per_row as f32
+            + HEX_GROUP_GAP * ((self.bytes_per_row / HEX_GROUP_SIZE).saturating_sub(1)) as f32
+    }
+
+    fn ascii_x(&self, origin_x: f32) -> f32 {
+        self.hex_x(origin_x) + self.hex_col_w() + COLUMN_GAP
+    }
+
+    fn total_width(&self) -> f32 {
+        self.ascii_x(0.0) + self.char_w * self.bytes_per_row as f32
+    }
+
+    /// X offset of hex cell `col` within a row (accounts for 8-byte group gaps).
+    fn hex_cell_x(&self, hex_x: f32, col: usize) -> f32 {
+        let group = col / HEX_GROUP_SIZE;
+        (group as f32).mul_add(HEX_GROUP_GAP, (col as f32).mul_add(self.cell_w, hex_x))
+    }
+
+    /// Map an x coordinate inside the hex column to a byte column index.
+    /// Returns `None` for clicks in inter-group gaps or outside the column.
+    fn hit_test_hex_col(&self, rel_x: f32, hex_x: f32) -> Option<usize> {
+        let hex_col_w = self.hex_col_w();
+        if rel_x < hex_x || rel_x >= hex_x + hex_col_w {
+            return None;
+        }
+        for col in 0..self.bytes_per_row {
+            let x0 = self.hex_cell_x(hex_x, col);
+            if (x0..x0 + self.cell_w).contains(&rel_x) {
+                return Some(col);
+            }
+        }
+        None
+    }
+}
+
+/// Resolve the monospace font from the active egui style (keeps layout in sync with theme).
+fn monospace_font(ui: &egui::Ui) -> egui::FontId {
+    egui::TextStyle::Monospace.resolve(ui.style())
+}
+
+/// Measure monospace character width using the same font as painting.
+fn measure_char_width(ui: &egui::Ui, font_id: &egui::FontId) -> f32 {
+    ui.painter()
+        .layout_no_wrap("0".to_string(), font_id.clone(), colors::GRAY_160)
+        .rect
+        .width()
+}
+
+// ---------------------------------------------------------------------------
 // PageBuilder
 // ---------------------------------------------------------------------------
 
@@ -74,8 +189,8 @@ pub struct PageBuilder {
 
     /// Pre-built set of every byte address covered by a search match.
     search_highlights: std::collections::HashSet<usize>,
-    /// The `(results_len, search_length)` pair used to build the current cache.
-    search_cache_key: (usize, usize),
+    /// `Search::results_version` used to build the current cache.
+    search_cache_version: u64,
 }
 
 impl PageBuilder {
@@ -87,7 +202,26 @@ impl PageBuilder {
             scratch_ascii: Vec::new(),
             scratch_hex: Vec::new(),
             search_highlights: std::collections::HashSet::new(),
-            search_cache_key: (0, 0),
+            search_cache_version: 0,
+        }
+    }
+
+    /// Merge extra flags into an already-built page (addresses outside the viewport are ignored).
+    ///
+    /// Alternative to `PageContext::diff_addrs` when flags are computed after `compute`.
+    pub fn apply_addr_flags(
+        page: &mut VisiblePage,
+        flags: impl IntoIterator<Item = (usize, CellFlags)>,
+    ) {
+        let row_len = page.bytes_per_row;
+        for (addr, extra) in flags {
+            if addr < page.start_addr {
+                continue;
+            }
+            let idx = addr - page.start_addr;
+            if idx < row_len * page.row_count {
+                page.flags[idx].insert(extra);
+            }
         }
     }
 
@@ -99,25 +233,23 @@ impl PageBuilder {
         &mut self,
         ih: &IntelHex,
         viewport: &Viewport,
-        selection: &Selection,
-        editor: &ByteEdit,
-        search: &Search,
+        ctx: &PageContext<'_>,
         out: &mut VisiblePage,
     ) {
         let len = viewport.row_count * viewport.bytes_per_row;
         let start_addr = viewport.display_start + viewport.first_row * viewport.bytes_per_row;
 
         // Lazily rebuild search highlight cache
-        let search_results = &search.results;
-        let search_length = search.length;
-        if self.search_cache_key != (search_results.len(), search_length) {
+        let search_results = &ctx.search.results;
+        let search_length = ctx.search.length;
+        if self.search_cache_version != ctx.search.results_version {
             self.search_highlights.clear();
             for &start in search_results {
                 for addr in start..start.saturating_add(search_length) {
                     self.search_highlights.insert(addr);
                 }
             }
-            self.search_cache_key = (search_results.len(), search_length);
+            self.search_cache_version = ctx.search.results_version;
         }
 
         // Prefetch data window
@@ -128,9 +260,13 @@ impl PageBuilder {
         self.scratch_ascii.clear();
         self.scratch_hex.clear();
 
-        let sel_range = selection.get_normalized_range();
-        let editor_active = editor.in_progress;
-        let editor_buf = &editor.buffer;
+        let sel_range = ctx.selection.get_normalized_range();
+        let editor_active = ctx.editor.in_progress;
+        let editor_buf = &ctx.editor.buffer;
+        let editor_preview_range = editor_active
+            .then(|| ctx.editor.addr)
+            .flatten()
+            .map(|[start, end]| (start.min(end), start.max(end)));
 
         // Compute per-byte flags, hex display strings, and ASCII chars
         for (i, byte) in self.scratch_data.iter().enumerate() {
@@ -147,16 +283,18 @@ impl PageBuilder {
             if self.search_highlights.contains(&addr) {
                 flags.insert(CellFlags::SEARCH_HIT);
             }
-            if editor.modified.contains_key(&addr) {
+            if ctx.diff_addrs.is_some_and(|diff| diff.contains(&addr)) {
+                flags.insert(CellFlags::DIFFERENT);
+            }
+            if ctx.editor.modified.contains_key(&addr) {
                 flags.insert(CellFlags::MODIFIED);
             }
             self.scratch_flags.push(flags);
 
-            // Hex display: show editor buffer for all selected bytes when
-            // editor is active, otherwise show the byte value.
+            // Hex display: show editor buffer on the edit target range while typing.
             #[allow(clippy::option_if_let_else)]
             let display = if let Some(b) = byte {
-                if flags.contains(CellFlags::SELECTED) && editor_active {
+                if editor_preview_range.is_some_and(|(min, max)| addr >= min && addr <= max) {
                     editor_buf.clone()
                 } else {
                     format!("{b:02X}")
@@ -199,28 +337,14 @@ pub struct HexResponse {
     pub interacted_addr: Option<usize>,
 }
 
-/// Pre-computed layout metrics for rendering.
-///
-/// All pixel values are derived from the monospace font at 12pt. The layout is:
-/// ```
-/// [addr_w][gap][hex_col (cell_w x bytes_per_row + 5px gaps every 8 bytes)]
-/// [gap][ascii_col (char_w x bytes_per_row)]
-/// ```
+/// Pre-computed layout metrics for rendering
 struct LayoutMetrics {
     /// Full row height: font height + egui's `item_spacing.y` (inter-row gap).
     row_height: f32,
-    /// Width of a single monospace character (measured from font).
-    char_w: f32,
-    /// Width of one hex cell: 3 x `char_w` (two hex digits + 1 space).
-    cell_w: f32,
-    /// Gap between columns (address <-> hex, hex <-> ascii).
-    gap: f32,
-    /// Width of the 8-hex-digit address column.
-    addr_w: f32,
-    /// X position where the ASCII column starts.
-    ascii_x: f32,
+    layout: HexLayout,
     /// Top-left corner of the rendered area (from `allocate_at_least`).
     origin: egui::Pos2,
+    font_id: egui::FontId,
 }
 
 /// Stateless renderer that paints a `VisiblePage` and performs hit-testing.
@@ -252,24 +376,12 @@ impl HexRenderer {
     /// determine which byte (if any) is hovered or being clicked/dragged on.
     /// The caller receives `HexResponse::interacted_addr` to update selection.
     pub fn paint(ui: &mut egui::Ui, page: &VisiblePage) -> HexResponse {
+        let font_id = monospace_font(ui);
         let row_height =
             ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
-        let char_w = ui
-            .painter()
-            .layout_no_wrap(
-                "0".to_string(),
-                egui::FontId::monospace(12.0),
-                colors::GRAY_160,
-            )
-            .rect
-            .width();
-        let cell_w = char_w * 3.0;
-        let gap = 16.0;
-        let addr_w = char_w * 8.0;
-        let hex_col_w = cell_w * page.bytes_per_row as f32
-            + 5.0 * ((page.bytes_per_row / 8).saturating_sub(1)) as f32;
-        let ascii_x = addr_w + gap + hex_col_w + gap;
-        let total_w = ascii_x + char_w * page.bytes_per_row as f32;
+        let char_w = measure_char_width(ui, &font_id);
+        let layout = HexLayout::from_char_w(char_w, page.bytes_per_row);
+        let total_w = layout.total_width();
 
         // Allocate space in the scroll area's layout. This advances the UI
         // cursor so the scroll area knows the content height.
@@ -291,7 +403,7 @@ impl HexRenderer {
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && rect.contains(pos)
         {
-            let hit = Self::hit_test(pos, rect.min, page, char_w, row_height);
+            let hit = Self::hit_test(pos, rect.min, page, &layout, row_height);
             if ui.input(|i| i.pointer.primary_down()) {
                 interacted_addr = hit;
             } else {
@@ -301,12 +413,9 @@ impl HexRenderer {
 
         let m = LayoutMetrics {
             row_height,
-            char_w,
-            cell_w,
-            gap,
-            addr_w,
-            ascii_x,
+            layout,
             origin: rect.min,
+            font_id,
         };
 
         let hover_stroke = egui::Stroke::new(1.0, colors::GRAY_160);
@@ -329,7 +438,7 @@ impl HexRenderer {
             egui::pos2(m.origin.x, row_y),
             egui::Align2::LEFT_TOP,
             format!("{addr:08X}"),
-            egui::FontId::monospace(12.0),
+            m.font_id.clone(),
             colors::GRAY_160,
         );
     }
@@ -352,26 +461,28 @@ impl HexRenderer {
         let row_y = (r as f32).mul_add(m.row_height, m.origin.y);
         let addr = page.start_addr + r * page.bytes_per_row;
         let offset = r * page.bytes_per_row;
-        let hex_x = m.origin.x + m.addr_w + m.gap;
+        let hex_x = m.layout.hex_x(m.origin.x);
 
         for i in 0..page.bytes_per_row {
             let byte_addr = addr + i;
             let byte_idx = offset + i;
             let flags = page.flags[byte_idx];
 
-            // Cell X position: base hex_x + column offset + extra 5px gap every 8 bytes.
-            let group = i / 8;
-            let x = (group as f32).mul_add(5.0, (i as f32).mul_add(m.cell_w, hex_x));
-            let cell_rect =
-                egui::Rect::from_min_size(egui::pos2(x, row_y), egui::vec2(m.cell_w, m.row_height));
+            let x = m.layout.hex_cell_x(hex_x, i);
+            let cell_rect = egui::Rect::from_min_size(
+                egui::pos2(x, row_y),
+                egui::vec2(m.layout.cell_w, m.row_height),
+            );
 
             // Background: paint colored rects for special states only.
             // Normal bytes have no background.
-            // Priority: selected > search hit > modified > (none)
+            // Priority: selected > search hit > different > modified > (none)
             if flags.contains(CellFlags::SELECTED) {
                 painter.rect_filled(cell_rect, 0.0, colors::LIGHT_BLUE);
             } else if flags.contains(CellFlags::SEARCH_HIT) {
                 painter.rect_filled(cell_rect, 0.0, colors::GREEN);
+            } else if flags.contains(CellFlags::DIFFERENT) {
+                painter.rect_filled(cell_rect, 0.0, colors::DIFF);
             } else if flags.contains(CellFlags::MODIFIED) {
                 painter.rect_filled(cell_rect, 0.0, colors::MUD);
             }
@@ -387,7 +498,7 @@ impl HexRenderer {
                 cell_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 &page.display_hex[byte_idx],
-                egui::FontId::monospace(12.0),
+                m.font_id.clone(),
                 text_color,
             );
 
@@ -421,21 +532,25 @@ impl HexRenderer {
             let ch = page.ascii[byte_idx];
             let flags = page.flags[byte_idx];
 
-            let x = (i as f32).mul_add(m.char_w, m.origin.x + m.ascii_x);
-            let cell_rect =
-                egui::Rect::from_min_size(egui::pos2(x, row_y), egui::vec2(m.char_w, m.row_height));
+            let x = (i as f32).mul_add(m.layout.char_w, m.layout.ascii_x(m.origin.x));
+            let cell_rect = egui::Rect::from_min_size(
+                egui::pos2(x, row_y),
+                egui::vec2(m.layout.char_w, m.row_height),
+            );
 
             if flags.contains(CellFlags::SELECTED) {
                 painter.rect_filled(cell_rect, 0.0, colors::LIGHT_BLUE);
             } else if flags.contains(CellFlags::SEARCH_HIT) {
                 painter.rect_filled(cell_rect, 0.0, colors::GREEN);
+            } else if flags.contains(CellFlags::DIFFERENT) {
+                painter.rect_filled(cell_rect, 0.0, colors::DIFF);
             }
 
             painter.text(
                 cell_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 ch.to_string(),
-                egui::FontId::monospace(12.0),
+                m.font_id.clone(),
                 colors::GRAY_160,
             );
 
@@ -445,21 +560,15 @@ impl HexRenderer {
         }
     }
 
-    /// Determine which byte address (if any) corresponds to a screen position.
+    /// Inverse of the paint layout: map a screen position to a byte address.
+    /// Uses the same [`HexLayout`] as painting so hit regions stay aligned.
     ///
-    /// This is the inverse of the painting layout: given a pixel coordinate,
-    /// figure out which row and column it falls in, then compute the byte address.
-    ///
-    /// The calculation uses the same fixed metrics (`char_w`, `cell_w`, gaps) as the
-    /// painter, so the mapping is exact - no per-cell widget hit regions needed.
-    ///
-    /// Returns `None` if the position is outside the hex/ascii columns (e.g., in
-    /// the address column, the gaps between columns, or below the last row).
+    /// Returns `None` outside hex/ascii columns, in column gaps, or in 8-byte group gaps.
     pub fn hit_test(
         pos: egui::Pos2,
         origin: egui::Pos2,
         page: &VisiblePage,
-        char_w: f32,
+        layout: &HexLayout,
         row_height: f32,
     ) -> Option<usize> {
         let rel = pos - origin;
@@ -469,23 +578,16 @@ impl HexRenderer {
         }
         let row = row as usize;
 
-        let gap = 16.0;
-        let addr_w = char_w * 8.0;
-        let cell_w = char_w * 3.0;
-        let hex_x = addr_w + gap;
-        let hex_col_w = cell_w * page.bytes_per_row as f32
-            + 5.0 * ((page.bytes_per_row / 8).saturating_sub(1)) as f32;
-        let ascii_x = hex_x + hex_col_w + gap;
-
+        let hex_x = layout.hex_x(0.0);
+        let ascii_x = layout.ascii_x(0.0);
         let rel_x = rel.x;
 
-        if rel_x >= hex_x && rel_x < hex_x + hex_col_w {
-            let col = ((rel_x - hex_x) / cell_w).floor();
-            if col >= 0.0 && col < page.bytes_per_row as f32 {
-                return Some(page.start_addr + row * page.bytes_per_row + col as usize);
-            }
-        } else if rel_x >= ascii_x {
-            let col = ((rel_x - ascii_x) / char_w).floor();
+        if let Some(col) = layout.hit_test_hex_col(rel_x, hex_x) {
+            return Some(page.start_addr + row * page.bytes_per_row + col);
+        }
+
+        if rel_x >= ascii_x {
+            let col = ((rel_x - ascii_x) / layout.char_w).floor();
             if col >= 0.0 && col < page.bytes_per_row as f32 {
                 return Some(page.start_addr + row * page.bytes_per_row + col as usize);
             }
@@ -519,8 +621,8 @@ mod tests {
         ih.update_range(
             0x0000,
             &[
-                0x41, 0x42, 0x00, 0xFF, 0x30, 0x39, 0x20, 0x7F,
-                0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                0x41, 0x42, 0x00, 0xFF, 0x30, 0x39, 0x20, 0x7F, 0x80, 0x01, 0x02, 0x03, 0x04, 0x05,
+                0x06, 0x07,
             ],
         )
         .unwrap();
@@ -552,8 +654,32 @@ mod tests {
             row_count: 1,
             bytes_per_row: 16,
         };
+        let ctx = PageContext::editor(sel, editor, search);
         let mut page = make_page();
-        pb.compute(ih, &viewport, sel, editor, search, &mut page);
+        pb.compute(ih, &viewport, &ctx, &mut page);
+        page
+    }
+
+    /// Like `compute_page` but passes a `diff_addrs` overlay via `PageContext`.
+    fn compute_page_with_diff(
+        ih: &IntelHex,
+        diff_addrs: &std::collections::HashSet<usize>,
+    ) -> VisiblePage {
+        let mut pb = PageBuilder::new();
+        let viewport = Viewport {
+            display_start: 0,
+            first_row: 0,
+            row_count: 1,
+            bytes_per_row: 16,
+        };
+        let ctx = PageContext {
+            selection: &Selection::default(),
+            editor: &ByteEdit::default(),
+            search: &Search::default(),
+            diff_addrs: Some(diff_addrs),
+        };
+        let mut page = make_page();
+        pb.compute(ih, &viewport, &ctx, &mut page);
         page
     }
 
@@ -660,9 +786,11 @@ mod tests {
         pb.compute(
             &ih,
             &viewport,
-            &Selection::default(),
-            &ByteEdit::default(),
-            &Search::default(),
+            &PageContext::editor(
+                &Selection::default(),
+                &ByteEdit::default(),
+                &Search::default(),
+            ),
             &mut page,
         );
 
@@ -732,8 +860,7 @@ mod tests {
         // Arrange
         let ih = make_ih();
         let mut search = Search::default();
-        search.results = vec![0x02, 0x08];
-        search.length = 3;
+        search.replace_results(vec![0x02, 0x08], 3);
 
         // Act
         let page = compute_page(&ih, &Selection::default(), &ByteEdit::default(), &search);
@@ -780,8 +907,7 @@ mod tests {
         sel.released = true;
 
         let mut search = Search::default();
-        search.results = vec![0x02];
-        search.length = 2;
+        search.replace_results(vec![0x02], 2);
 
         // Act
         let page = compute_page(&ih, &sel, &ByteEdit::default(), &search);
@@ -850,6 +976,38 @@ mod tests {
     }
 
     #[test]
+    fn compute_editor_preview_uses_addr_when_selection_cleared() {
+        // Arrange - edit in progress but selection cleared (e.g., side-panel focus)
+        let ih = make_ih();
+        let sel = Selection::default();
+
+        let mut editor = ByteEdit::default();
+        editor.in_progress = true;
+        editor.buffer = "A".to_string();
+        editor.addr = Some([0x02, 0x04]);
+
+        let mut pb = PageBuilder::new();
+        let viewport = Viewport {
+            display_start: 0,
+            first_row: 0,
+            row_count: 1,
+            bytes_per_row: 16,
+        };
+        let search = Search::default();
+        let ctx = PageContext::editor(&sel, &editor, &search);
+        let mut page = make_page();
+
+        // Act
+        pb.compute(&ih, &viewport, &ctx, &mut page);
+
+        // Assert — preview on edit range, not on selection
+        assert_eq!(page.display_hex[2], "A");
+        assert_eq!(page.display_hex[3], "A");
+        assert_eq!(page.display_hex[4], "A");
+        assert_eq!(page.display_hex[0], "41");
+    }
+
+    #[test]
     fn compute_reversed_selection() {
         // Arrange
         let ih = make_ih();
@@ -891,9 +1049,7 @@ mod tests {
         pb.compute(
             &ih,
             &viewport,
-            &Selection::default(),
-            &ByteEdit::default(),
-            &search,
+            &PageContext::editor(&Selection::default(), &ByteEdit::default(), &search),
             &mut page,
         );
 
@@ -902,16 +1058,13 @@ mod tests {
 
         // Arrange
         // Second call: search results added
-        search.results = vec![0x05];
-        search.length = 1;
+        search.replace_results(vec![0x05], 1);
 
         // Act
         pb.compute(
             &ih,
             &viewport,
-            &Selection::default(),
-            &ByteEdit::default(),
-            &search,
+            &PageContext::editor(&Selection::default(), &ByteEdit::default(), &search),
             &mut page,
         );
 
@@ -919,22 +1072,72 @@ mod tests {
         assert!(page.flags[5].contains(CellFlags::SEARCH_HIT));
 
         // Arrange
-        // Third call: search results cleared
-        search.results.clear();
-        search.length = 0;
+        // Third call: different result, same length (cache must invalidate)
+        search.replace_results(vec![0x06], 1);
 
         // Act
         pb.compute(
             &ih,
             &viewport,
-            &Selection::default(),
-            &ByteEdit::default(),
-            &search,
+            &PageContext::editor(&Selection::default(), &ByteEdit::default(), &search),
             &mut page,
         );
 
         // Assert
         assert!(!page.flags[5].contains(CellFlags::SEARCH_HIT));
+        assert!(page.flags[6].contains(CellFlags::SEARCH_HIT));
+
+        // Arrange
+        // Fourth call: search results cleared
+        search.replace_results(Vec::new(), 0);
+
+        // Act
+        pb.compute(
+            &ih,
+            &viewport,
+            &PageContext::editor(&Selection::default(), &ByteEdit::default(), &search),
+            &mut page,
+        );
+
+        // Assert
+        assert!(!page.flags[5].contains(CellFlags::SEARCH_HIT));
+    }
+
+    #[test]
+    fn compute_diff_flags() {
+        // Arrange
+        let ih = make_ih();
+        let mut diff = std::collections::HashSet::new();
+        diff.insert(0x04);
+        diff.insert(0x05);
+
+        // Act
+        let page = compute_page_with_diff(&ih, &diff);
+
+        // Assert
+        assert!(!page.flags[3].contains(CellFlags::DIFFERENT));
+        assert!(page.flags[4].contains(CellFlags::DIFFERENT));
+        assert!(page.flags[5].contains(CellFlags::DIFFERENT));
+        assert!(!page.flags[6].contains(CellFlags::DIFFERENT));
+    }
+
+    #[test]
+    fn apply_addr_flags_marks_in_viewport_only() {
+        // Arrange
+        let ih = make_ih();
+        let mut page = compute_page(
+            &ih,
+            &Selection::default(),
+            &ByteEdit::default(),
+            &Search::default(),
+        );
+
+        // Act
+        PageBuilder::apply_addr_flags(&mut page, [(0x02, CellFlags::DIFFERENT)]);
+
+        // Assert
+        assert!(page.flags[2].contains(CellFlags::DIFFERENT));
+        assert!(!page.flags[0].contains(CellFlags::DIFFERENT));
     }
 
     // ======================================================================
@@ -954,19 +1157,25 @@ mod tests {
         }
     }
 
-    /// Helper: compute the layout metrics matching HexRenderer::hit_test exactly
-    fn layout_info(page: &VisiblePage, char_w: f32) -> (egui::Pos2, f32, f32, f32, f32, f32) {
-        let cell_w = char_w * 3.0;
-        let row_height = 19.0;
-        let gap = 16.0;
-        let addr_w = char_w * 8.0;
-        let hex_x = addr_w + gap;
-        let hex_col_w = cell_w * page.bytes_per_row as f32
-            + 5.0 * ((page.bytes_per_row / 8).saturating_sub(1)) as f32;
-        // Must match hit_test: ascii_x = hex_x + hex_col_w + gap
-        let ascii_x = hex_x + hex_col_w + gap;
+    /// Helper: layout used by hit_test tests.
+    fn hit_layout(page: &VisiblePage, char_w: f32) -> (egui::Pos2, f32, HexLayout) {
         let origin = egui::pos2(100.0, 50.0);
-        (origin, row_height, cell_w, hex_x, ascii_x, char_w)
+        let layout = HexLayout::from_char_w(char_w, page.bytes_per_row);
+        (origin, 19.0, layout)
+    }
+
+    fn hex_cell_center(
+        origin: egui::Pos2,
+        layout: &HexLayout,
+        row_h: f32,
+        row: usize,
+        col: usize,
+    ) -> egui::Pos2 {
+        // Center of hex cell at (row, col) - mirrors paint layout.
+        let row_y = origin.y + row as f32 * row_h;
+        let hex_x = layout.hex_x(origin.x);
+        let x = layout.hex_cell_x(hex_x, col) + layout.cell_w / 2.0;
+        egui::pos2(x, row_y + row_h / 2.0)
     }
 
     #[test]
@@ -974,13 +1183,11 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        // Center of first hex cell
-        let pos = egui::pos2(origin.x + hex_x + cell_w / 2.0, origin.y + row_h / 2.0);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let pos = hex_cell_center(origin, &layout, row_h, 0, 0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x1000));
@@ -991,18 +1198,47 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        // Center of last hex cell (column 15), accounting for 5px gap after byte 7
-        let gap_8 = 5.0;
-        let x = origin.x + hex_x + 15.0 * cell_w + gap_8 + cell_w / 2.0;
-        let pos = egui::pos2(x, origin.y + row_h / 2.0);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let pos = hex_cell_center(origin, &layout, row_h, 0, 15);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x100F));
+    }
+
+    #[test]
+    fn hit_test_byte_in_second_group() {
+        // Arrange
+        let char_w = 7.2;
+        let page = make_hit_page(0x0000, 16, 1);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let pos = hex_cell_center(origin, &layout, row_h, 0, 8);
+
+        // Act
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
+
+        // Assert
+        assert_eq!(res, Some(0x0008));
+    }
+
+    #[test]
+    fn hit_test_byte_nine_near_byte_eight_edge() {
+        // Arrange
+        let char_w = 7.2;
+        let page = make_hit_page(0x0000, 16, 1);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        // Near the right edge of byte 8's cell — must not map to byte 9.
+        let pos = hex_cell_center(origin, &layout, row_h, 0, 8);
+        let mut near_right = pos;
+        near_right.x = layout.hex_cell_x(layout.hex_x(origin.x), 8) + layout.cell_w - 1.0;
+
+        // Act
+        let res = HexRenderer::hit_test(near_right, origin, &page, &layout, row_h);
+
+        // Assert
+        assert_eq!(res, Some(0x0008));
     }
 
     #[test]
@@ -1010,12 +1246,12 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, _cell_w, _hex_x, ascii_x, cw) = layout_info(&page, char_w);
-
-        let pos = egui::pos2(origin.x + ascii_x + cw / 2.0, origin.y + row_h / 2.0);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let ascii_x = layout.ascii_x(origin.x);
+        let pos = egui::pos2(ascii_x + layout.char_w / 2.0, origin.y + row_h / 2.0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x1000));
@@ -1026,13 +1262,11 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        // Center of first hex cell in row 1
-        let pos = egui::pos2(origin.x + hex_x + cell_w / 2.0, origin.y + row_h * 1.5);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let pos = hex_cell_center(origin, &layout, row_h, 1, 0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x1010));
@@ -1043,12 +1277,12 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        let pos = egui::pos2(origin.x + hex_x + cell_w / 2.0, origin.y - 1.0);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let mut pos = hex_cell_center(origin, &layout, row_h, 0, 0);
+        pos.y = origin.y - 1.0;
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, None);
@@ -1059,15 +1293,12 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        let pos = egui::pos2(
-            origin.x + hex_x + cell_w / 2.0,
-            origin.y + row_h * 4.0 + 1.0,
-        );
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let mut pos = hex_cell_center(origin, &layout, row_h, 0, 0);
+        pos.y = origin.y + row_h * 4.0 + 1.0;
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, None);
@@ -1078,13 +1309,11 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, _cell_w, _hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        // X within the address column (before hex_x)
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
         let pos = egui::pos2(origin.x + 10.0, origin.y + row_h / 2.0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, None);
@@ -1095,37 +1324,35 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x1000, 16, 4);
-        let (origin, row_h, cell_w, hex_x, ascii_x, _cw) = layout_info(&page, char_w);
-
-        // X in the gap between hex and ASCII columns
-        let hex_end = hex_x + cell_w * 16.0 + 5.0; // 1 gap of 5px
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let hex_x = layout.hex_x(origin.x);
+        let hex_end = hex_x + layout.hex_col_w();
+        let ascii_x = layout.ascii_x(origin.x);
         let gap_center = (hex_end + ascii_x) / 2.0;
-        let pos = egui::pos2(origin.x + gap_center, origin.y + row_h / 2.0);
+        let pos = egui::pos2(gap_center, origin.y + row_h / 2.0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, None);
     }
 
     #[test]
-    fn hit_test_second_group_first_cell() {
+    fn hit_test_in_inter_group_gap_returns_none() {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x0000, 16, 1);
-        let (origin, row_h, cell_w, hex_x, _ascii_x, _cw) = layout_info(&page, char_w);
-
-        // Byte 8: first byte of second 8-byte group (shifted by 5px gap)
-        let gap_8 = 5.0;
-        let x = origin.x + hex_x + 8.0 * cell_w + gap_8 + cell_w / 2.0;
-        let pos = egui::pos2(x, origin.y + row_h / 2.0);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
+        let hex_x = layout.hex_x(origin.x);
+        // 5px gap between bytes 7 and 8
+        let pos = egui::pos2(hex_x + 8.0 * layout.cell_w + 2.0, origin.y + row_h / 2.0);
 
         // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
-        assert_eq!(res, Some(0x0008));
+        assert_eq!(res, None);
     }
 
     #[test]
@@ -1133,23 +1360,19 @@ mod tests {
         // Arrange
         let char_w = 7.2;
         let page = make_hit_page(0x2000, 16, 2);
-        let (origin, row_h, cell_w, hex_x, ascii_x, cw) = layout_info(&page, char_w);
+        let (origin, row_h, layout) = hit_layout(&page, char_w);
 
-        // First hex cell
-        let pos = egui::pos2(origin.x + hex_x + cell_w / 2.0, origin.y + row_h / 2.0);
-
-        // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        // Act - first hex cell
+        let pos = hex_cell_center(origin, &layout, row_h, 0, 0);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x2000));
 
-        // Arrange
-        // First ASCII cell, second row
-        let pos = egui::pos2(origin.x + ascii_x + cw / 2.0, origin.y + row_h * 1.5);
-
-        // Act
-        let res = HexRenderer::hit_test(pos, origin, &page, char_w, row_h);
+        // Act - first ASCII cell, second row
+        let ascii_x = layout.ascii_x(origin.x);
+        let pos = egui::pos2(ascii_x + layout.char_w / 2.0, origin.y + row_h * 1.5);
+        let res = HexRenderer::hit_test(pos, origin, &page, &layout, row_h);
 
         // Assert
         assert_eq!(res, Some(0x2010));

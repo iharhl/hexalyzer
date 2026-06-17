@@ -54,7 +54,7 @@ impl HexSession {
 
             // Clear the selection to avoid modifying bytes
             // while typing in the jumpto area
-            self.selection.clear();
+            self.clear_selection();
         }
 
         if events.enter_released && self.jump_to.has_focus {

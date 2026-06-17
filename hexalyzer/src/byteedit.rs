@@ -49,6 +49,14 @@ impl ByteEdit {
 }
 
 impl HexSession {
+    /// Clear selection and cancel any in-progress byte edit.
+    pub(crate) fn clear_selection(&mut self) {
+        if self.editor.in_progress {
+            self.editor.clear();
+        }
+        self.selection.clear();
+    }
+
     /// Update edit buffer used for temporary storage of user key inputs
     /// during byte editing process
     pub(crate) fn update_edit_buffer(&mut self, typed_chars: &[char]) {
@@ -60,55 +68,63 @@ impl HexSession {
         }
 
         for &ch in typed_chars {
-            if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
-            {
-                // Start editing if user types a hex char
-                if ch.is_ascii_hexdigit() {
-                    self.editor.in_progress = true;
-                    self.editor.addr = self.selection.range;
-                    self.editor.buffer = ch.to_ascii_uppercase().to_string();
-                }
-            } else if self.editor.in_progress {
-                // If other bytes got selected - clear and return
+            let ch = ch.to_ascii_uppercase();
+            if !ch.is_ascii_hexdigit() {
+                continue;
+            }
+
+            if self.editor.in_progress {
                 if self.editor.addr != self.selection.range {
                     self.editor.clear();
-                }
-
-                self.editor.buffer.insert(1, ch);
-
-                // Allow only hex chars
-                self.editor.buffer.retain(|c| c.is_ascii_hexdigit());
-
-                // When two hex chars are entered - commit automatically
-                if self.editor.buffer.len() == 2 {
-                    if let Ok(value) = u8::from_str_radix(&self.editor.buffer, 16)
-                        && let Some([start, end]) = self.editor.addr
-                    {
-                        // Handle reversed range
-                        let s = start.min(end);
-                        let e = start.max(end);
-
-                        // Update the bytes in the map. If the byte is actually changed -
-                        // insert its address into Vec that tracks modified bytes.
-                        for addr in s..=e {
-                            let prev_value = self.ih.read_byte(addr);
-                            if self.ih.update_byte(addr, value).ok() == Some(())
-                                && let Some(prev) = prev_value
-                                && value != prev
-                            {
-                                self.editor.modified.entry(addr).or_insert(prev);
-                            }
-                        }
-
-                        // If there are search results - redo it
-                        if !self.search.results.is_empty() {
-                            self.search.redo();
-                        }
-                    }
-                    self.editor.clear();
+                } else {
+                    self.append_edit_nibble(ch);
+                    continue;
                 }
             }
+
+            if self.selection.range.is_some() && self.selection.released {
+                self.editor.in_progress = true;
+                self.editor.addr = self.selection.range;
+                self.editor.buffer.clear();
+                self.editor.buffer.push(ch);
+            }
         }
+    }
+
+    /// Append one hex digit to the in-progress edit buffer; commit when two digits are entered.
+    fn append_edit_nibble(&mut self, ch: char) {
+        if self.editor.buffer.len() >= 2 {
+            self.editor.buffer.clear();
+        }
+        self.editor.buffer.push(ch);
+
+        if self.editor.buffer.len() == 2 {
+            self.commit_byte_edit();
+        }
+    }
+
+    fn commit_byte_edit(&mut self) {
+        if let Ok(value) = u8::from_str_radix(&self.editor.buffer, 16)
+            && let Some([start, end]) = self.editor.addr
+        {
+            let s = start.min(end);
+            let e = start.max(end);
+
+            for addr in s..=e {
+                let prev_value = self.ih.read_byte(addr);
+                if self.ih.update_byte(addr, value).ok() == Some(())
+                    && let Some(prev) = prev_value
+                    && value != prev
+                {
+                    self.editor.modified.entry(addr).or_insert(prev);
+                }
+            }
+
+            if !self.search.results.is_empty() {
+                self.search.redo();
+            }
+        }
+        self.editor.clear();
     }
 
     /// Restore all modified bytes to their original values

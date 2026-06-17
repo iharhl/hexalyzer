@@ -19,6 +19,8 @@ pub mod colors {
     pub const GRAY_210: Color32 = Color32::from_gray(210);
     pub const SHADOW: Color32 = Color32::from_black_alpha(150);
     pub const WARNING: Color32 = Color32::from_rgb(160, 160, 16);
+    /// Highlight for bytes that differ in a side-by-side diff view
+    pub const DIFF: Color32 = Color32::from_rgba_premultiplied(120, 40, 40, 35);
 }
 
 #[derive(PartialEq, Eq)]

@@ -26,6 +26,8 @@ pub struct Search {
     pub(crate) results: Vec<usize>,
     /// Length of the search pattern in bytes
     pub(crate) length: usize,
+    /// Incremented when results change; consumed by `PageBuilder` highlight cache
+    pub(crate) results_version: u64,
     /// Does the search text field have focus
     pub(crate) has_focus: bool,
     /// Index of the current search result
@@ -45,12 +47,21 @@ pub struct Search {
 }
 
 impl Search {
+    /// Replace search results and invalidate dependent caches.
+    /// Bumps `results_version` so `PageBuilder` rebuilds its highlight set.
+    pub(crate) fn replace_results(&mut self, results: Vec<usize>, length: usize) {
+        self.results = results;
+        self.length = length;
+        self.results_version = self.results_version.wrapping_add(1);
+    }
+
     /// Clear the search state
     pub(crate) fn clear(&mut self) {
         self.has_focus = false;
         self.addr = None;
         self.results.clear();
         self.length = 0;
+        self.results_version = self.results_version.wrapping_add(1);
         // Do not clear current to preserve text box content
         self.last = SearchState::default();
         self.idx = 0;
@@ -111,7 +122,7 @@ impl HexSession {
 
             // Clear the selection to avoid modifying bytes
             // while typing in the search area
-            self.selection.clear();
+            self.clear_selection();
         }
 
         if (events.enter_released && self.search.has_focus) || self.search.force {
@@ -127,8 +138,8 @@ impl HexSession {
                 let valid = match self.search.current.mode {
                     SearchMode::Hex => {
                         if let Some(pattern) = parse_str_into_bytes(input) {
-                            self.search.results = self.ih.search_bytes(&pattern);
-                            self.search.length = pattern.len();
+                            let results = self.ih.search_bytes(&pattern);
+                            self.search.replace_results(results, pattern.len());
                             true
                         } else {
                             false
@@ -138,8 +149,8 @@ impl HexSession {
                         if input.is_empty() {
                             false
                         } else {
-                            self.search.results = self.ih.search_ascii(input, false);
-                            self.search.length = input.len();
+                            let results = self.ih.search_ascii(input, false);
+                            self.search.replace_results(results, input.len());
                             true
                         }
                     }
@@ -147,8 +158,8 @@ impl HexSession {
                         if input.is_empty() {
                             false
                         } else {
-                            self.search.results = self.ih.search_ascii(input, true);
-                            self.search.length = 1; // highlight the first byte of the match
+                            let results = self.ih.search_ascii(input, true);
+                            self.search.replace_results(results, 1); // highlight the first byte of the match
                             true
                         }
                     }
@@ -156,7 +167,7 @@ impl HexSession {
 
                 // Clear the result if pattern is not valid
                 if !valid {
-                    self.search.results.clear();
+                    self.search.replace_results(Vec::new(), 0);
                 }
 
                 // Reset the state of search

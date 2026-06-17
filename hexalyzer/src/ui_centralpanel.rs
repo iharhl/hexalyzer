@@ -1,6 +1,6 @@
 use crate::app::HexSession;
 use crate::events::EventState;
-use crate::hexview::{HexRenderer, Viewport, VisiblePage};
+use crate::hexview::{HexRenderer, PageContext, Viewport, VisiblePage};
 use eframe::egui;
 
 impl HexSession {
@@ -51,14 +51,9 @@ impl HexSession {
                         row_count: row_range.end - row_range.start,
                         bytes_per_row,
                     };
-                    self.page_builder.compute(
-                        &self.ih,
-                        &viewport,
-                        &self.selection,
-                        &self.editor,
-                        &self.search,
-                        &mut page,
-                    );
+                    let page_ctx = PageContext::editor(&self.selection, &self.editor, &self.search);
+                    self.page_builder
+                        .compute(&self.ih, &viewport, &page_ctx, &mut page);
 
                     // Handle user interaction and paint
                     self.draw_page(ui, &page, events);
