@@ -179,14 +179,10 @@ fn measure_char_width(ui: &egui::Ui, font_id: &egui::FontId) -> f32 {
 // PageBuilder
 // ---------------------------------------------------------------------------
 
-/// Computes a `VisiblePage` from model state. Owns scratch buffers and a search
-/// highlight cache to avoid per-frame allocations.
+/// Computes a `VisiblePage` from model state. Caches the search highlight set
+/// to avoid rebuilding it every frame.
+#[derive(Default)]
 pub struct PageBuilder {
-    scratch_data: Vec<Option<u8>>,
-    scratch_flags: Vec<CellFlags>,
-    scratch_ascii: Vec<char>,
-    scratch_hex: Vec<String>,
-
     /// Pre-built set of every byte address covered by a search match.
     search_highlights: std::collections::HashSet<usize>,
     /// `Search::results_version` used to build the current cache.
@@ -194,18 +190,6 @@ pub struct PageBuilder {
 }
 
 impl PageBuilder {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            scratch_data: Vec::new(),
-            scratch_flags: Vec::new(),
-            scratch_ascii: Vec::new(),
-            scratch_hex: Vec::new(),
-            search_highlights: std::collections::HashSet::new(),
-            search_cache_version: 0,
-        }
-    }
-
     /// Merge extra flags into an already-built page (addresses outside the viewport are ignored).
     ///
     /// Alternative to `PageContext::diff_addrs` when flags are computed after `compute`.
@@ -252,13 +236,17 @@ impl PageBuilder {
             self.search_cache_version = ctx.search.results_version;
         }
 
-        // Prefetch data window
-        self.scratch_data.clear();
-        self.scratch_data.extend(ih.iter_range(start_addr, len));
+        // Fetch data window
+        out.start_addr = start_addr;
+        out.bytes_per_row = viewport.bytes_per_row;
+        out.row_count = viewport.row_count;
 
-        self.scratch_flags.clear();
-        self.scratch_ascii.clear();
-        self.scratch_hex.clear();
+        out.data.clear();
+        out.data.extend(ih.iter_range(start_addr, len));
+
+        out.flags.clear();
+        out.ascii.clear();
+        out.display_hex.clear();
 
         let sel_range = ctx.selection.get_normalized_range();
         let editor_active = ctx.editor.in_progress;
@@ -269,7 +257,7 @@ impl PageBuilder {
             .map(|[start, end]| (start.min(end), start.max(end)));
 
         // Compute per-byte flags, hex display strings, and ASCII chars
-        for (i, byte) in self.scratch_data.iter().enumerate() {
+        for (i, byte) in out.data.iter().enumerate() {
             let addr = start_addr + i;
 
             // Flags
@@ -289,7 +277,7 @@ impl PageBuilder {
             if ctx.editor.modified.contains_key(&addr) {
                 flags.insert(CellFlags::MODIFIED);
             }
-            self.scratch_flags.push(flags);
+            out.flags.push(flags);
 
             // Hex display: show editor buffer on the edit target range while typing.
             #[allow(clippy::option_if_let_else)]
@@ -302,7 +290,7 @@ impl PageBuilder {
             } else {
                 "--".to_string()
             };
-            self.scratch_hex.push(display);
+            out.display_hex.push(display);
 
             // ASCII
             let ch = byte.map_or(' ', |b| {
@@ -312,17 +300,8 @@ impl PageBuilder {
                     '\u{00B7}' // middle dot for non-printable
                 }
             });
-            self.scratch_ascii.push(ch);
+            out.ascii.push(ch);
         }
-
-        // Build the output page.
-        out.start_addr = start_addr;
-        out.bytes_per_row = viewport.bytes_per_row;
-        out.row_count = viewport.row_count;
-        out.data.clone_from(&self.scratch_data);
-        out.flags.clone_from(&self.scratch_flags);
-        out.ascii.clone_from(&self.scratch_ascii);
-        out.display_hex.clone_from(&self.scratch_hex);
     }
 }
 
@@ -647,7 +626,7 @@ mod tests {
         editor: &ByteEdit,
         search: &Search,
     ) -> VisiblePage {
-        let mut pb = PageBuilder::new();
+        let mut pb = PageBuilder::default();
         let viewport = Viewport {
             display_start: 0,
             first_row: 0,
@@ -665,7 +644,7 @@ mod tests {
         ih: &IntelHex,
         diff_addrs: &std::collections::HashSet<usize>,
     ) -> VisiblePage {
-        let mut pb = PageBuilder::new();
+        let mut pb = PageBuilder::default();
         let viewport = Viewport {
             display_start: 0,
             first_row: 0,
@@ -765,7 +744,7 @@ mod tests {
         ih.write_range(0x0010, 0x0013).unwrap();
         ih.update_range(0x0010, &[0xEE, 0xFF, 0x11, 0x22]).unwrap();
 
-        let mut pb = PageBuilder::new();
+        let mut pb = PageBuilder::default();
         let viewport = Viewport {
             display_start: 0,
             first_row: 0,
@@ -986,7 +965,7 @@ mod tests {
         editor.buffer = "A".to_string();
         editor.addr = Some([0x02, 0x04]);
 
-        let mut pb = PageBuilder::new();
+        let mut pb = PageBuilder::default();
         let viewport = Viewport {
             display_start: 0,
             first_row: 0,
@@ -1033,7 +1012,7 @@ mod tests {
         // Arrange
         let ih = make_ih();
 
-        let mut pb = PageBuilder::new();
+        let mut pb = PageBuilder::default();
         let viewport = Viewport {
             display_start: 0,
             first_row: 0,

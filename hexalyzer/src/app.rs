@@ -95,7 +95,7 @@ impl Default for HexSession {
             selection: Selection::default(),
             search: Search::default(),
             jump_to: JumpTo::default(),
-            page_builder: PageBuilder::new(),
+            page_builder: PageBuilder::default(),
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
