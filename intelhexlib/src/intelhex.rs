@@ -999,6 +999,84 @@ impl IntelHex {
         Ok(())
     }
 
+    /// Remove data in the address range `[start_addr, end_addr]` from the `IntelHex` buffer.
+    ///
+    /// Chunks that overlap with the range are trimmed or split as needed.
+    /// If the range contains no data, this is a no-op.
+    ///
+    /// # Errors
+    /// Returns an error if `start_addr > end_addr`.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// let mut ih = IntelHex::new();
+    /// ih.write_range(0x1000, 0x100F).unwrap();
+    /// ih.remove_range(0x1004, 0x100B).unwrap();
+    ///
+    /// assert_eq!(ih.read_byte(0x1003), Some(0x00));
+    /// assert_eq!(ih.read_byte(0x1004), None);
+    /// assert_eq!(ih.read_byte(0x100B), None);
+    /// assert_eq!(ih.read_byte(0x100C), Some(0x00));
+    /// ```
+    pub fn remove_range(
+        &mut self,
+        start_addr: usize,
+        end_addr: usize,
+    ) -> Result<(), IntelHexError> {
+        if start_addr > end_addr {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(start_addr),
+            ));
+        }
+
+        let remove_start = start_addr;
+        let remove_end = end_addr + 1; // exclusive
+
+        // Collect keys of chunks that overlap with the removal range
+        let affected_keys: Vec<usize> = self
+            .buffer
+            .range(..=end_addr)
+            .filter(|&(&chunk_start, chunk_data)| {
+                let chunk_end = chunk_start + chunk_data.len();
+                chunk_end > remove_start && chunk_start < remove_end
+            })
+            .map(|(&k, _)| k)
+            .collect();
+
+        let mut new_chunks: Vec<(usize, Vec<u8>)> = Vec::new();
+
+        for key in affected_keys {
+            let Some(chunk_data) = self.buffer.remove(&key) else {
+                continue;
+            };
+            let chunk_end = key + chunk_data.len();
+
+            // Left fragment: portion before the removal range
+            if key < remove_start {
+                let left_end = std::cmp::min(remove_start, chunk_end);
+                new_chunks.push((key, chunk_data[..left_end - key].to_vec()));
+            }
+
+            // Right fragment: portion after the removal range
+            if chunk_end > remove_end {
+                let right_start = std::cmp::max(remove_end, key);
+                new_chunks.push((remove_end, chunk_data[right_start - key..].to_vec()));
+            }
+        }
+
+        // Insert trimmed chunks
+        for (addr, data) in new_chunks {
+            self.buffer.insert(addr, data);
+        }
+
+        // Update total size
+        self.size = self.buffer.values().map(Vec::len).sum();
+
+        Ok(())
+    }
+
     /// Update the max payload size (number of bytes) per record when writing `IntelHex` file.
     /// Default = 16.
     ///
@@ -2103,6 +2181,161 @@ mod tests {
             ))
         );
         assert_eq!(ih.size, 1);
+    }
+
+    #[test]
+    fn test_remove_range_valid() {
+        // Arrange - remove entire chunk
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        ih.size = 4;
+
+        // Act
+        let res = ih.remove_range(0x1000, 0x1003);
+
+        // Assert
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+
+        // Arrange - split chunk in the middle
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
+        ih.size = 5;
+
+        // Act
+        let res = ih.remove_range(0x1001, 0x1003);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 2);
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1001), None);
+        assert_eq!(ih.read_byte(0x1003), None);
+        assert_eq!(ih.read_byte(0x1004), Some(0xEE));
+        assert_eq!(ih.size, 2);
+
+        // Arrange - remove from start of chunk
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        ih.size = 4;
+
+        // Act
+        let res = ih.remove_range(0x1000, 0x1001);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.read_byte(0x1000), None);
+        assert_eq!(ih.read_byte(0x1001), None);
+        assert_eq!(ih.read_byte(0x1002), Some(0xCC));
+        assert_eq!(ih.read_byte(0x1003), Some(0xDD));
+        assert_eq!(ih.size, 2);
+
+        // Arrange - remove from end of chunk
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        ih.size = 4;
+
+        // Act
+        let res = ih.remove_range(0x1002, 0x1003);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1001), Some(0xBB));
+        assert_eq!(ih.read_byte(0x1002), None);
+        assert_eq!(ih.read_byte(0x1003), None);
+        assert_eq!(ih.size, 2);
+
+        // Arrange - range spans multiple chunks with gap
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB]);
+        ih.buffer.insert(0x1008, vec![0xCC, 0xDD]);
+        ih.size = 4;
+
+        // Act
+        let res = ih.remove_range(0x1000, 0x1009);
+
+        // Assert
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+
+        // Arrange - trim edges of two chunks
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB, 0xCC]);
+        ih.buffer.insert(0x1008, vec![0xDD, 0xEE, 0xFF]);
+        ih.size = 6;
+
+        // Act
+        let res = ih.remove_range(0x1001, 0x1008);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 2);
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.read_byte(0x1001), None);
+        assert_eq!(ih.read_byte(0x1008), None);
+        assert_eq!(ih.read_byte(0x1009), Some(0xEE));
+        assert_eq!(ih.read_byte(0x100A), Some(0xFF));
+        assert_eq!(ih.size, 3);
+
+        // Arrange - range outside existing data
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA, 0xBB]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.remove_range(0x2000, 0x200F);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.buffer.len(), 1);
+        assert_eq!(ih.read_byte(0x1000), Some(0xAA));
+        assert_eq!(ih.size, 2);
+
+        // Arrange - empty buffer
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.remove_range(0x1000, 0x100F);
+
+        // Assert
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+
+        // Arrange - single byte
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0xAA]);
+        ih.size = 1;
+
+        // Act
+        let res = ih.remove_range(0x1000, 0x1000);
+
+        // Assert
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+    }
+
+    #[test]
+    fn test_remove_range_invalid() {
+        // Arrange
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.remove_range(0x100F, 0x1000);
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(0x100F)
+            ))
+        );
     }
 }
 
