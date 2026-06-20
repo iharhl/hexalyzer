@@ -165,7 +165,11 @@ impl PopupState {
     fn on_confirm(self, app: &mut HexViewerApp) {
         match self {
             Self::ReAddr { addr: address } => {
-                let addr = usize::from_str_radix(&address, 16).unwrap_or_default();
+                let Some(addr) = usize::from_str_radix(&address, 16).ok() else {
+                    app.error.replace("Invalid address format".to_string());
+                    return;
+                };
+
                 let Some(curr_session) = app.get_curr_session_mut() else {
                     return;
                 };
