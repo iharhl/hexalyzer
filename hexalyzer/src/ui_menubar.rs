@@ -25,7 +25,7 @@ impl HexViewerApp {
     }
 
     fn file_menu(&mut self, ui: &mut egui::Ui) {
-        let has_file = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
+        let has_file = self.get_curr_session().is_some();
 
         ui.menu_button("File", |ui| {
             // OPEN BUTTON
@@ -36,6 +36,7 @@ impl HexViewerApp {
             }
 
             // EXPORT BUTTON
+            let gap_fill = self.gap_fill;
             if ui
                 .add_enabled(has_file, egui::Button::new("Export file..."))
                 .clicked()
@@ -50,10 +51,20 @@ impl HexViewerApp {
                 }
 
                 let kind = loader::kind_from_extension(&path);
-                if let Err(msg) = loader::write_ih_to_path(&mut curr_session.ih, &path, &kind) {
+                if let Err(msg) =
+                    loader::write_ih_to_path(&mut curr_session.ih, &path, &kind, gap_fill)
+                {
                     self.error = Some(msg);
                 }
             }
+
+            // GAP FILL SUBMENU
+            ui.menu_button("Gap Fill", |ui| {
+                ui.label(egui::RichText::new("Fill byte for gaps when\nexporting to BIN"));
+                ui.separator();
+                ui.radio_value(&mut self.gap_fill, 0x00, "0x00");
+                ui.radio_value(&mut self.gap_fill, 0xFF, "0xFF");
+            });
 
             // RELOAD BUTTON
             let has_filepath = self
@@ -102,14 +113,15 @@ impl HexViewerApp {
     }
 
     fn edit_popup_items(&mut self, ui: &mut egui::Ui) {
-        let has_file = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
+        let has_file = self.get_curr_session().is_some();
+        let has_data = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
         let has_modifications = self
             .get_curr_session()
             .is_some_and(|s| !s.editor.modified.is_empty());
 
         // RELOCATE BUTTON
         if ui
-            .add_enabled(has_file, egui::Button::new("Relocate..."))
+            .add_enabled(has_data, egui::Button::new("Relocate..."))
             .clicked()
             && !self.popup.active
         {
@@ -120,7 +132,7 @@ impl HexViewerApp {
 
         // MERGE BUTTON
         if ui
-            .add_enabled(has_file, egui::Button::new("Merge..."))
+            .add_enabled(has_data, egui::Button::new("Merge..."))
             .clicked()
             && !self.popup.active
             && let Some(path) = rfd::FileDialog::new()
@@ -133,6 +145,8 @@ impl HexViewerApp {
                 addr_merge: String::new(),
             });
         }
+
+        ui.separator();
 
         // INSERT RANGE BUTTON
         if ui
@@ -148,7 +162,7 @@ impl HexViewerApp {
 
         // REMOVE RANGE BUTTON
         if ui
-            .add_enabled(has_file, egui::Button::new("Remove Range..."))
+            .add_enabled(has_data, egui::Button::new("Remove Range..."))
             .clicked()
             && !self.popup.active
         {
@@ -157,6 +171,8 @@ impl HexViewerApp {
                 end: String::new(),
             });
         }
+
+        ui.separator();
 
         // RESTORE BUTTON
         if ui

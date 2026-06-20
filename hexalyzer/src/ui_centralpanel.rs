@@ -17,6 +17,19 @@ impl HexSession {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Align to 0x10 so every printed row address ends with '0'
             const ROW_ADDR_ALIGN: usize = 0x10;
+
+            // Show placeholder for empty files
+            if self.ih.size == 0 {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() / 3.0);
+                    ui.label(
+                        egui::RichText::new("No data records")
+                            .color(egui::Color32::GRAY)
+                            .monospace(),
+                    );
+                });
+                return;
+            }
             let align_down = |addr: usize| addr & !(ROW_ADDR_ALIGN - 1);
             let align_up = |addr: usize| (addr + (ROW_ADDR_ALIGN - 1)) & !(ROW_ADDR_ALIGN - 1);
 
