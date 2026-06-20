@@ -7,7 +7,7 @@ default-members = ["hexalyzer"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Ihar Hlukhau | ihluk@outlook.com"]
 license = "MIT"
@@ -16,7 +16,7 @@ repository = "https://github.com/iharhl/hexalyzer"
 
 [workspace.dependencies]
 intelhexlib = { path = "intelhexlib" }
-eframe = "0.33.2"
+eframe = "0.34.3"
 rfd = "0.17.2"
 
 [profile.bench]

@@ -10,11 +10,11 @@ impl HexSession {
     /// to define the central region and implements a scrollable hex view with UI event handling.
     pub(crate) fn show_central_panel(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         bytes_per_row: usize,
         events: &EventState,
     ) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             // Align to 0x10 so every printed row address ends with '0'
             const ROW_ADDR_ALIGN: usize = 0x10;
 

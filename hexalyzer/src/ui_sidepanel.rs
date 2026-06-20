@@ -5,7 +5,7 @@ use eframe::egui;
 
 impl HexViewerApp {
     /// Show the side panel with the file information, jump to address, search, and data inspector.
-    pub(crate) fn show_side_panel(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show_side_panel(&mut self, ui: &mut egui::Ui) {
         if !self.side_panel_expanded {
             return;
         }
@@ -13,9 +13,9 @@ impl HexViewerApp {
         // Clone events before mutable borrow of self for session access
         let events = self.events.clone();
 
-        egui::SidePanel::left("left_panel")
-            .exact_width(280.0)
-            .show(ctx, |ui| {
+        egui::Panel::left("left_panel")
+            .exact_size(280.0)
+            .show_inside(ui, |ui| {
                 ui.add_space(3.0);
 
                 // Get the currently active session. If none active - use the dummy one

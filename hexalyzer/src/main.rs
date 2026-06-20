@@ -50,7 +50,12 @@ fn main() -> eframe::Result<()> {
 }
 
 impl eframe::App for HexViewerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Clone the context to avoid holding an immutable borrow on `ui` while
+        // also passing it mutably to panel methods. Context is an Arc internally,
+        // so cloning is just a reference count bump.
+        let ctx = ui.ctx().clone();
+
         #[cfg(debug_assertions)]
         {
             // Track FPS
@@ -64,23 +69,23 @@ impl eframe::App for HexViewerApp {
         }
 
         // Collect input events once per frame
-        self.events = events::collect_ui_events_ctx(ctx);
-        self.handle_copy_shortcut(ctx);
+        self.events = events::collect_ui_events_ctx(&ctx);
+        self.handle_copy_shortcut(&ctx);
 
-        self.show_menu_bar(ctx);
+        self.show_menu_bar(ui);
 
         // Render converter tool window if opened
-        self.converter.show(ctx);
+        self.converter.show(&ctx);
 
         if self.error.is_some() {
             let msg = self.error.clone().unwrap_or_default();
             self.popup.open(PopupState::Error(msg));
         }
 
-        self.show_side_panel(ctx);
-        self.show_tabs(ctx);
+        self.show_side_panel(ui);
+        self.show_tabs(ui);
 
-        self.handle_drag_and_drop(ctx);
+        self.handle_drag_and_drop(ui);
 
         // If a blocking popup is active - show it and return (don't display the hex bytes)
         if self.popup.active
@@ -90,7 +95,7 @@ impl eframe::App for HexViewerApp {
                 .as_ref()
                 .is_some_and(PopupState::is_blocking)
         {
-            self.show_popup(ctx);
+            self.show_popup(&ctx);
             return;
         }
 
@@ -102,10 +107,10 @@ impl eframe::App for HexViewerApp {
                 if self.converter.has_focus() {
                     curr_session.selection.clear();
                 }
-                curr_session.show_central_panel(ctx, self.bytes_per_row, &self.events);
+                curr_session.show_central_panel(ui, self.bytes_per_row, &self.events);
             }
         } else {
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.label("Drop a file or click '+' to start hexing!");
                 });
@@ -114,7 +119,7 @@ impl eframe::App for HexViewerApp {
 
         // Show non-blocking popups on top of everything else
         if self.popup.active {
-            self.show_popup(ctx);
+            self.show_popup(&ctx);
         }
     }
 }
