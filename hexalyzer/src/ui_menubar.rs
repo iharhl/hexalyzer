@@ -60,7 +60,9 @@ impl HexViewerApp {
 
             // GAP FILL SUBMENU
             ui.menu_button("Gap Fill", |ui| {
-                ui.label(egui::RichText::new("Fill byte for gaps when\nexporting to BIN"));
+                ui.label(egui::RichText::new(
+                    "Fill byte for gaps when\nexporting to BIN",
+                ));
                 ui.separator();
                 ui.radio_value(&mut self.gap_fill, 0x00, "0x00");
                 ui.radio_value(&mut self.gap_fill, 0xFF, "0xFF");

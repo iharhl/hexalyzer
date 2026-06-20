@@ -97,10 +97,8 @@ impl eframe::App for HexViewerApp {
         // Show the content of the active session
         if let Some(index) = self.active_index {
             if let Some(curr_session) = self.sessions.get_mut(index) {
-                curr_session.selection.blocked =
-                    self.popup.active || self.converter.has_focus();
-                curr_session.editor.blocked =
-                    self.popup.active || self.converter.has_focus();
+                curr_session.selection.blocked = self.popup.active || self.converter.has_focus();
+                curr_session.editor.blocked = self.popup.active || self.converter.has_focus();
                 if self.converter.has_focus() {
                     curr_session.selection.clear();
                 }

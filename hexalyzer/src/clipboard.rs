@@ -79,7 +79,7 @@ impl HexViewerApp {
 
 impl HexSession {
     /// Returns the selected bytes formatted as a continuous hex string (e.g. `"FFFF"`),
-    /// or `None` if no selection exists or no bytes are present.
+    /// or `None` if no selection exists or no bytes are present
     pub(crate) fn selected_bytes_as_hex(&self) -> Option<String> {
         let sel = self.selection.range?;
         let min = *sel.iter().min()?;
@@ -93,8 +93,8 @@ impl HexSession {
         if hex.is_empty() { None } else { Some(hex) }
     }
 
-    /// Returns the selected bytes as ASCII text (printable chars kept, non-printable → `.`,
-    /// absent addresses → space), or `None` if no selection exists.
+    /// Returns the selected bytes as ASCII text (printable chars kept, non-printable -> `·`,
+    /// absent addresses -> space), or `None` if no selection exists
     pub(crate) fn selected_bytes_as_ascii(&self) -> Option<String> {
         let sel = self.selection.range?;
         let min = *sel.iter().min()?;
@@ -103,7 +103,7 @@ impl HexSession {
         for addr in min..=max {
             match self.ih.read_byte(addr) {
                 Some(b) if b.is_ascii_graphic() || b == b' ' => ascii.push(b as char),
-                Some(_) => ascii.push('.'),
+                Some(_) => ascii.push('·'),
                 None => ascii.push(' '),
             }
         }
@@ -111,7 +111,7 @@ impl HexSession {
     }
 
     /// Returns the start address of the selection formatted as hex (e.g. `"0x00001000"`),
-    /// or `None` if no selection exists.
+    /// or `None` if no selection exists
     pub(crate) fn selected_addr(&self) -> Option<String> {
         let sel = self.selection.range?;
         let min = *sel.iter().min()?;

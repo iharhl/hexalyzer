@@ -60,8 +60,7 @@ impl HexConverter {
                     });
             });
         self.active = is_open;
-        self.focused = response
-            .is_some_and(|r| r.response.hovered() || r.response.has_focus());
+        self.focused = response.is_some_and(|r| r.response.hovered() || r.response.has_focus());
     }
 
     fn show_contents(&mut self, ui: &mut egui::Ui) {
@@ -134,7 +133,12 @@ impl HexConverter {
         input_row!("Bin:", Field::Bin, &mut self.bin, |s: &mut String| {
             s.retain(|c| c == '0' || c == '1');
         });
-        input_row!("ASCII:", Field::Ascii, &mut self.ascii, |_s: &mut String| {});
+        input_row!(
+            "ASCII:",
+            Field::Ascii,
+            &mut self.ascii,
+            |_s: &mut String| {}
+        );
     }
 
     /// Parse `source`, convert to the other three fields using current
@@ -264,7 +268,11 @@ fn trim_negative_be_bytes(bytes: &[u8]) -> Vec<u8> {
     }
     // Keep one extra 0xFF when the first non-sign byte has bit 7 set,
     // otherwise two, so `be_bytes_to_i128` reconstructs the correct value.
-    let extra = if bytes[first_non_ff] & 0x80 != 0 { 1 } else { 2 };
+    let extra = if bytes[first_non_ff] & 0x80 != 0 {
+        1
+    } else {
+        2
+    };
     let keep = first_non_ff.saturating_sub(extra);
     bytes[keep..].to_vec()
 }
@@ -303,7 +311,7 @@ fn format_as_bin(bytes: &[u8], endian: Endian) -> String {
     be_bytes_to_u128(bytes, endian).map_or_else(String::new, |v| format!("{v:b}"))
 }
 
-/// Format bytes as an ASCII string; non-printable characters become '.'
+/// Format bytes as an ASCII string; non-printable characters become '·'
 fn format_as_ascii(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -311,7 +319,7 @@ fn format_as_ascii(bytes: &[u8]) -> String {
             if b.is_ascii_graphic() || b == b' ' {
                 b as char
             } else {
-                '.'
+                '·'
             }
         })
         .collect()
@@ -333,7 +341,7 @@ fn be_bytes_to_u128(bytes: &[u8], endian: Endian) -> Option<u128> {
             Some(u128::from_be_bytes(buf))
         }
         Endian::Little => {
-            // LE: first canonical byte is MSB → goes at the high end.
+            // LE: first canonical byte is MSB -> goes at the high end.
             buf[..bytes.len()].copy_from_slice(bytes);
             Some(u128::from_le_bytes(buf))
         }
@@ -343,8 +351,7 @@ fn be_bytes_to_u128(bytes: &[u8], endian: Endian) -> Option<u128> {
 /// Convert big-endian canonical bytes to `i128` respecting endianness
 fn be_bytes_to_i128(bytes: &[u8], endian: Endian) -> i128 {
     let mut buf = [0u8; 16];
-    // Sign-extend: fill leading bytes with 0xFF if MSB has bit 7 set,
-    // otherwise 0x00.
+    // Fill leading bytes with 0xFF if MSB has bit 7 set, otherwise 0x00
     let sign = if bytes[0] & 0x80 != 0 { 0xFF } else { 0x00 };
     buf.fill(sign);
     match endian {

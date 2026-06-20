@@ -229,7 +229,13 @@ impl HexSession {
 
                 // Determine display char
                 let byte = bytes[i];
-                let ch = byte.map_or(' ', |b| if b.is_ascii_graphic() { b as char } else { '.' });
+                let ch = byte.map_or(' ', |b| {
+                    if b.is_ascii_graphic() {
+                        b as char
+                    } else {
+                        '·'
+                    }
+                });
 
                 // Determine is char selected
                 let is_selected = byte.is_some() && self.selection.is_addr_within_range(addr);
