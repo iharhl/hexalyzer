@@ -186,6 +186,8 @@ impl PopupState {
                     return;
                 }
 
+                curr_session.dirty = true;
+
                 if let Some(old_start_addr) = old_start_addr {
                     curr_session.editor.remap_modified(addr, old_start_addr);
                 }
@@ -212,6 +214,8 @@ impl PopupState {
                     return;
                 }
 
+                curr_session.dirty = true;
+
                 curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
                     ..=curr_session.ih.get_max_addr().unwrap_or(0);
                 curr_session.search.redo();
@@ -229,9 +233,15 @@ impl PopupState {
                     return;
                 };
 
+                let size_before = curr_session.ih.size;
+
                 if let Err(err) = curr_session.ih.remove_range(start, end) {
                     app.error.replace(err.to_string());
                     return;
+                }
+
+                if curr_session.ih.size != size_before {
+                    curr_session.dirty = true;
                 }
 
                 curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
@@ -249,6 +259,7 @@ impl PopupState {
                 app.merge_file_into_curr_session(&path, addr1, addr2);
 
                 if let Some(curr_session) = app.get_curr_session_mut() {
+                    curr_session.dirty = true;
                     curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
                         ..=curr_session.ih.get_max_addr().unwrap_or(0);
                     curr_session.search.redo();

@@ -50,6 +50,9 @@ pub struct HexSession {
     pub last_mod_check: std::time::Instant,
     /// Whether the file on disk has diverged from the loaded data (sticky until next poll).
     pub file_changed_on_disk: bool,
+    /// Whether the session has been modified by structural operations (relocate, insert/remove
+    /// range, merge). Byte-level edits are tracked separately in `editor.modified`.
+    pub dirty: bool,
     /// Detected file format at load time
     pub file_kind: FileKind,
     /// Scroll id that allows each tab to keep its own scroll position
@@ -96,6 +99,7 @@ impl Default for HexSession {
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
+            dirty: false,
             file_kind: FileKind::Unknown,
             scroll_id: 0,
         }

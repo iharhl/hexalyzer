@@ -162,7 +162,7 @@ impl HexViewerApp {
     pub(crate) fn has_unsaved_changes(&self, session_id: usize) -> bool {
         self.sessions
             .get(session_id)
-            .is_some_and(|s| !s.editor.modified.is_empty())
+            .is_some_and(|s| s.dirty || !s.editor.modified.is_empty())
     }
 
     /// Reload the file from disk, replacing in-memory data.
@@ -205,6 +205,7 @@ impl HexViewerApp {
         session.file_changed_on_disk = false;
         session.file_kind = file_kind;
         session.editor = ByteEdit::default();
+        session.dirty = false;
         session.search.redo();
     }
 
@@ -234,6 +235,7 @@ impl HexViewerApp {
         };
 
         session.editor.modified.clear();
+        session.dirty = false;
         session.last_modified =
             get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         session.file_changed_on_disk = false;
