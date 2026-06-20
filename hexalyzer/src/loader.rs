@@ -1,10 +1,11 @@
 use crate::app::{HexSession, HexViewerApp};
+use crate::byteedit::ByteEdit;
 use intelhexlib::IntelHex;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileKind {
     Hex,
     Bin,
@@ -63,7 +64,7 @@ impl HexViewerApp {
 
         let mut ih = IntelHex::new();
 
-        let file_type = match detect_file_kind(path) {
+        let file_kind = match detect_file_kind(path) {
             Ok(kind) => kind,
             Err(err) => {
                 self.error = Some(err.to_string());
@@ -71,7 +72,7 @@ impl HexViewerApp {
             }
         };
 
-        let res = match file_type {
+        let res = match file_kind {
             FileKind::Hex => ih.load_hex(path).map_err(|e| e.to_string()),
             FileKind::Bin => {
                 // Set base addr to 0 to avoid complex logic around waiting
@@ -106,6 +107,7 @@ impl HexViewerApp {
                 |n| n.to_string_lossy().into_owned(),
             ),
             last_modified,
+            file_kind,
             scroll_id,
             ..HexSession::default()
         };
@@ -131,6 +133,109 @@ impl HexViewerApp {
         } else {
             self.active_index = Some(0);
         }
+    }
+
+    /// Returns `true` if the session has unsaved in-memory edits.
+    pub(crate) fn has_unsaved_changes(&self, session_id: usize) -> bool {
+        self.sessions
+            .get(session_id)
+            .is_some_and(|s| !s.editor.modified.is_empty())
+    }
+
+    /// Reload the file from disk, replacing in-memory data.
+    /// Resets editor state and updates the last-modified timestamp.
+    pub(crate) fn reload_file(&mut self, session_id: usize) {
+        let Some(session) = self.sessions.get(session_id) else {
+            return;
+        };
+
+        let path = session.ih.filepath.clone();
+        if path.as_os_str().is_empty() {
+            self.error = Some("No file path associated with this session".into());
+            return;
+        }
+
+        let file_kind = match detect_file_kind(&path) {
+            Ok(kind) => kind,
+            Err(err) => {
+                self.error = Some(err.to_string());
+                return;
+            }
+        };
+
+        let mut ih = IntelHex::new();
+        let res = match file_kind {
+            FileKind::Hex => ih.load_hex(&path).map_err(|e| e.to_string()),
+            FileKind::Bin => ih.load_bin(&path, 0).map_err(|e| e.to_string()),
+            FileKind::Elf => Err("ELF files are not yet supported".to_string()),
+            FileKind::Unknown => Err("Could not determine the file type".to_string()),
+        };
+
+        if let Err(msg) = res {
+            self.error = Some(msg);
+            return;
+        }
+
+        let last_modified = match get_last_modified(&path) {
+            Ok(time) => time,
+            Err(err) => {
+                self.error = Some(err.to_string());
+                return;
+            }
+        };
+
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return;
+        };
+
+        session.ih = ih;
+        session.addr =
+            session.ih.get_min_addr().unwrap_or(0)..=session.ih.get_max_addr().unwrap_or(0);
+        session.last_modified = last_modified;
+        session.file_changed_on_disk = false;
+        session.file_kind = file_kind;
+        session.editor = ByteEdit::default();
+        session.search.redo();
+    }
+
+    /// Save the current session back to its original file path.
+    /// Writes in the same format the file was loaded as.
+    /// Clears the dirty state on success.
+    pub(crate) fn save_curr_session(&mut self) {
+        let Some(session) = self.get_curr_session_mut() else {
+            return;
+        };
+
+        let path = session.ih.filepath.clone();
+        if path.as_os_str().is_empty() {
+            self.error = Some("No file path associated with this session".into());
+            return;
+        }
+
+        let file_kind = session.file_kind.clone();
+
+        let res = match file_kind {
+            FileKind::Hex => session.ih.write_hex(&path),
+            FileKind::Bin => session.ih.write_bin(&path, 0x00),
+            _ => {
+                self.error = Some("Cannot save: unknown file format".into());
+                return;
+            }
+        };
+
+        if let Err(msg) = res {
+            self.error = Some(msg.to_string());
+            return;
+        }
+
+        let Some(session) = self.get_curr_session_mut() else {
+            return;
+        };
+
+        session.editor.modified.clear();
+        session.last_modified =
+            get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        session.file_changed_on_disk = false;
     }
 
     /// Merges the content of a file into the current `IntelHex` session.

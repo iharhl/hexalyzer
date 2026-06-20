@@ -1,5 +1,6 @@
 use crate::byteedit::ByteEdit;
 use crate::events::EventState;
+use crate::loader::FileKind;
 use crate::selection::Selection;
 use crate::ui_converter::HexConverter;
 use crate::ui_jumpto::JumpTo;
@@ -49,6 +50,8 @@ pub struct HexSession {
     pub last_mod_check: std::time::Instant,
     /// Whether the file on disk has diverged from the loaded data (sticky until next poll).
     pub file_changed_on_disk: bool,
+    /// Detected file format at load time
+    pub file_kind: FileKind,
     /// Scroll id that allows each tab to keep its own scroll position
     pub scroll_id: usize,
 }
@@ -93,6 +96,7 @@ impl Default for HexSession {
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
+            file_kind: FileKind::Unknown,
             scroll_id: 0,
         }
     }

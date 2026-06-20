@@ -3,12 +3,12 @@ use crate::app::HexSession;
 use crate::ui_popup::PopupState;
 use eframe::egui;
 
-enum SaveFormat {
+pub enum SaveFormat {
     Bin,
     Hex,
 }
 
-fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
+pub fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -74,12 +74,39 @@ impl HexViewerApp {
                 }
             }
 
+            // RELOAD BUTTON
+            let has_file = self
+                .get_curr_session()
+                .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
+
+            if ui
+                .add_enabled(has_file, egui::Button::new("Reload"))
+                .clicked()
+                && let Some(session_id) = self.active_index
+            {
+                if self.has_unsaved_changes(session_id) {
+                    self.popup.open(PopupState::CloseConfirm {
+                        session_id,
+                        reload_after: true,
+                    });
+                } else {
+                    self.reload_file(session_id);
+                }
+            }
+
             // CLOSE BUTTON
             if ui.button("Close file").clicked()
-                && let Some(curr_session_id) = self.active_index
-                && let Some(_) = self.get_curr_session()
+                && let Some(session_id) = self.active_index
+                && self.get_curr_session().is_some()
             {
-                self.close_file(curr_session_id);
+                if self.has_unsaved_changes(session_id) {
+                    self.popup.open(PopupState::CloseConfirm {
+                        session_id,
+                        reload_after: false,
+                    });
+                } else {
+                    self.close_file(session_id);
+                }
             }
         });
     }
