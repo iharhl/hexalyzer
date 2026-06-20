@@ -16,7 +16,7 @@ repository = "https://github.com/iharhl/hexalyzer"
 
 [workspace.dependencies]
 intelhexlib = { path = "intelhexlib" }
-eframe = "0.34.3"
+eframe = { version = "0.34.3", default-features = false }
 rfd = "0.17.2"
 
 [profile.bench]

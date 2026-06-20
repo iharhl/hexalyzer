@@ -4,9 +4,14 @@ version = "0.3.0"
 edition = "2024"
 
 [dependencies]
-eframe.workspace = true
 rfd.workspace = true
 intelhexlib.workspace = true
+# On Windows: use lightweight 'glow' (OpenGL) backend
+[target.'cfg(windows)'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "glow"] }
+# On Mac/Linux: use 'default' features
+[target.'cfg(not(windows))'.dependencies]
+eframe = { workspace = true, features = ["default"] }
 
 [build-dependencies]
 winresource = "0.1.28"
