@@ -83,6 +83,9 @@ pub struct HexViewerApp {
     pub events: EventState,
     /// Errors during parsing, editing, or writing `IntelHex` file
     pub error: Option<String>,
+
+    /// Gap fill byte used when exporting to binary (0x00 or 0xFF)
+    pub gap_fill: u8,
 }
 
 impl Default for HexSession {
@@ -119,6 +122,7 @@ impl Default for HexViewerApp {
             side_panel_expanded: true,
             events: EventState::default(),
             error: None,
+            gap_fill: 0x00,
         }
     }
 }

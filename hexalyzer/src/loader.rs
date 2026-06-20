@@ -78,10 +78,11 @@ pub fn write_ih_to_path(
     ih: &mut IntelHex,
     path: &std::path::Path,
     kind: &FileKind,
+    gap_fill: u8,
 ) -> Result<(), String> {
     match kind {
         FileKind::Hex => ih.write_hex(path).map_err(|e| e.to_string()),
-        FileKind::Bin => ih.write_bin(path, 0x00).map_err(|e| e.to_string()),
+        FileKind::Bin => ih.write_bin(path, gap_fill).map_err(|e| e.to_string()),
         _ => Err("Cannot write: unknown file format".to_string()),
     }
 }
@@ -213,6 +214,8 @@ impl HexViewerApp {
     /// Writes in the same format the file was loaded as.
     /// Clears the dirty state on success.
     pub(crate) fn save_curr_session(&mut self) {
+        let gap_fill = self.gap_fill;
+
         let Some(session) = self.get_curr_session_mut() else {
             return;
         };
@@ -225,7 +228,7 @@ impl HexViewerApp {
 
         let file_kind = session.file_kind.clone();
 
-        if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &file_kind) {
+        if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &file_kind, gap_fill) {
             self.error = Some(msg);
             return;
         }
