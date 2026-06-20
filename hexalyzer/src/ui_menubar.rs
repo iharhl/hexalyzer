@@ -1,25 +1,8 @@
 use crate::HexViewerApp;
 use crate::app::HexSession;
+use crate::loader;
 use crate::ui_popup::PopupState;
 use eframe::egui;
-
-enum SaveFormat {
-    Bin,
-    Hex,
-}
-
-fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)?
-        .as_str()
-    {
-        "bin" => Some(SaveFormat::Bin),
-        "hex" => Some(SaveFormat::Hex),
-        _ => None,
-    }
-}
 
 impl HexViewerApp {
     /// Displays the top menu bar with File, Edit, View, and About buttons
@@ -42,6 +25,8 @@ impl HexViewerApp {
     }
 
     fn file_menu(&mut self, ui: &mut egui::Ui) {
+        let has_file = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
+
         ui.menu_button("File", |ui| {
             // OPEN BUTTON
             if ui.button("Open file...").clicked()
@@ -51,9 +36,10 @@ impl HexViewerApp {
             }
 
             // EXPORT BUTTON
-            if ui.button("Export file...").clicked()
+            if ui
+                .add_enabled(has_file, egui::Button::new("Export file..."))
+                .clicked()
                 && let Some(curr_session) = self.get_curr_session_mut()
-                && curr_session.ih.size != 0
                 && let Some(mut path) = rfd::FileDialog::new()
                     .set_title("Save As")
                     .set_file_name(curr_session.name.clone())
@@ -63,23 +49,46 @@ impl HexViewerApp {
                     path.set_extension("bin");
                 }
 
-                let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
+                let kind = loader::kind_from_extension(&path);
+                if let Err(msg) = loader::write_ih_to_path(&mut curr_session.ih, &path, &kind) {
+                    self.error = Some(msg);
+                }
+            }
 
-                let res = match format {
-                    SaveFormat::Bin => curr_session.ih.write_bin(path, 0x00),
-                    SaveFormat::Hex => curr_session.ih.write_hex(path),
-                };
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
+            // RELOAD BUTTON
+            let has_filepath = self
+                .get_curr_session()
+                .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
+
+            if ui
+                .add_enabled(has_filepath, egui::Button::new("Reload"))
+                .clicked()
+                && let Some(session_id) = self.active_index
+            {
+                if self.has_unsaved_changes(session_id) {
+                    self.popup.open(PopupState::CloseConfirm {
+                        session_id,
+                        reload_after: true,
+                    });
+                } else {
+                    self.reload_file(session_id);
                 }
             }
 
             // CLOSE BUTTON
-            if ui.button("Close file").clicked()
-                && let Some(curr_session_id) = self.active_index
-                && let Some(_) = self.get_curr_session()
+            if ui
+                .add_enabled(has_file, egui::Button::new("Close file"))
+                .clicked()
+                && let Some(session_id) = self.active_index
             {
-                self.close_file(curr_session_id);
+                if self.has_unsaved_changes(session_id) {
+                    self.popup.open(PopupState::CloseConfirm {
+                        session_id,
+                        reload_after: false,
+                    });
+                } else {
+                    self.close_file(session_id);
+                }
             }
         });
     }
@@ -93,11 +102,16 @@ impl HexViewerApp {
     }
 
     fn edit_popup_items(&mut self, ui: &mut egui::Ui) {
+        let has_file = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
+        let has_modifications = self
+            .get_curr_session()
+            .is_some_and(|s| !s.editor.modified.is_empty());
+
         // RELOCATE BUTTON
-        if ui.button("Relocate...").clicked()
+        if ui
+            .add_enabled(has_file, egui::Button::new("Relocate..."))
+            .clicked()
             && !self.popup.active
-            && let Some(curr_session) = self.get_curr_session()
-            && curr_session.ih.size != 0
         {
             self.popup.open(PopupState::ReAddr {
                 addr: String::new(),
@@ -105,10 +119,10 @@ impl HexViewerApp {
         }
 
         // MERGE BUTTON
-        if ui.button("Merge...").clicked()
+        if ui
+            .add_enabled(has_file, egui::Button::new("Merge..."))
+            .clicked()
             && !self.popup.active
-            && let Some(curr_session) = self.get_curr_session()
-            && curr_session.ih.size != 0
             && let Some(path) = rfd::FileDialog::new()
                 .set_title("Merge with File")
                 .pick_file()
@@ -121,10 +135,10 @@ impl HexViewerApp {
         }
 
         // INSERT RANGE BUTTON
-        if ui.button("Insert Range...").clicked()
+        if ui
+            .add_enabled(has_file, egui::Button::new("Insert Range..."))
+            .clicked()
             && !self.popup.active
-            && let Some(curr_session) = self.get_curr_session()
-            && curr_session.ih.size != 0
         {
             self.popup.open(PopupState::InsertRange {
                 start: String::new(),
@@ -133,9 +147,10 @@ impl HexViewerApp {
         }
 
         // RESTORE BUTTON
-        if ui.button("Restore byte changes").clicked()
+        if ui
+            .add_enabled(has_modifications, egui::Button::new("Restore byte changes"))
+            .clicked()
             && let Some(curr_session) = self.get_curr_session_mut()
-            && curr_session.ih.size != 0
         {
             curr_session.restore();
         }

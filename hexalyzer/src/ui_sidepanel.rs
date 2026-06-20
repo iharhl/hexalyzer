@@ -90,7 +90,7 @@ impl HexViewerApp {
                             )
                             .on_hover_text(
                                 "This file has been modified on disk since it was opened.\n\
-                                You can reload it manually by closing and loading the file again.",
+                                Use File > Reload to reload it from disk.",
                             );
                         }
 
