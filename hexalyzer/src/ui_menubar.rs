@@ -146,6 +146,18 @@ impl HexViewerApp {
             });
         }
 
+        // REMOVE RANGE BUTTON
+        if ui
+            .add_enabled(has_file, egui::Button::new("Remove Range..."))
+            .clicked()
+            && !self.popup.active
+        {
+            self.popup.open(PopupState::RemoveRange {
+                start: String::new(),
+                end: String::new(),
+            });
+        }
+
         // RESTORE BUTTON
         if ui
             .add_enabled(has_modifications, egui::Button::new("Restore byte changes"))
