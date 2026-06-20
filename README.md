@@ -65,20 +65,30 @@ tools:
 
 #### File
 
-1. `Open file...`: Browse your system to load a file into a new tab.
-2. `Export file...`: Save your current session to a new file.
-3. `Close file`: Close the current tab.
+- `Open file`: Browse your system to load a file into a new tab.
+- `Export file`: Save your current session to a new file.
+- `Gap Fill`: Setting for export to fill gaps with specific bytes.
+- `Reload`: Reload the current file from disk.
+- `Close file`: Close the current tab.
 
 #### Edit
 
-1. `Relocate...`: Relocate the current file to a new start address.
-2. `Merge...`: Merge selected file into the current one. Before merging, new start
+- `Relocate`: Relocate the current file to a new start address.
+- `Merge`: Merge selected file into the current one. Before merging, new start
 addresses can be specified for both files.
-3. `Restore byte changes`: Discard all changes made to the current file.
+- `Insert Range`: Insert range of bytes at provided address range.
+- `Remove Range`: Remove range of bytes from provided address range.
+- `Restore byte changes`: Discard all changes made to the current file.
+- `Copy as HEX / as ASCII / Address`: Copy selected bytes to clipboard as HEX, ASCII or their (start) address.
 
 #### View
 
 Switch between displaying 16 or 32 bytes per row.
+
+#### Tools
+
+- `Hex Converter`: a helper tool that can convert between HEX / DEC / BIN / ASCII formats;
+accounts for the endianness and signedness of the data.
 
 #### About
 
@@ -152,7 +162,7 @@ Its functionality includes:
 
 ```
  ----------------------------------------------------------------
-|  Intel HEX Utility  | v0.2.0 - Copyright (c) 2026 Ihar Hlukhau |
+|  Intel HEX Utility  | v0.3.0 - Copyright (c) 2026 Ihar Hlukhau |
  ----------------------------------------------------------------
 
 Usage:
@@ -175,56 +185,18 @@ Examples:
 
 ## History
 
-v0.1.0 (2026-01-14) - Initial Release
+v0.1.0 (2026-01-14) - Initial Release.
 
 v0.2.0 (2026-01-30) - Release with added usability features and
-improved performance
+improved performance.
+
+v0.3.0 (2026-06-20) - Added lots of new features; improved UX.
 
 
-## Potential app improvements
+## Future app improvement ideas
 
-### UX and performance improvements to the app
-
-1. Per-frame allocations in the hex grid
-
-- Issue: app creates 16/32 `Button`s + 16/32 `Label`s per row; each byte formats strings (`format!("{:02X}")`);
-search, edits, etc. copy data around.
-
-- Impact: hundreds of widgets and heap allocations per frame → high CPU pressure.
-
-- Potential fix: render whole row as a single galley (`LayoutJob`) for hex and another for ASCII; detect
-hovered/selected cell via math on mouse position instead of individual widgets.
-
-2. Virtual scroll over (potentially huge) sparse ranges
-
-- Issue: hex files can have address gaps, these gaps are displayed as empty rows.
-
-- Impact: although it is used in some other hex viewer apps, it is not ideal for UX.
-
-- Fix: compress gaps into a separator. The problem is that jump/search/etc offset calculations have to be
-adjusted accordingly.
-
-3. Tabs are hacky to say the least...
-
-### Architectural weaknesses
-
-1. UI tightly couples rendering and model details
-
-- HexSession owns data, selection, editing, search, and paints per-byte widgets directly. Harder to unit test, 
-refactor and optimize.
-
-- Possible solution: introduce a ViewModel layer: compute a lightweight "visible page" (bytes, ascii, selection
-masks) separate from painting. The painter consumes this without hitting the data layer repeatedly.
-
-2. Synchronous tasks on the main thread
-
-- File load/save and potentially large searches run on the UI thread without the possibility to cancel.
-
-- Possible solution: job system with background workers; add cancel and progress.
-
-### Additional features
-
-1. Support Copy, Undo, Redo, etc.
-2. Support ELF format
-3. Add timestamp (time since epoch) type in the data inspector
-4. Saving an entire app state / session
+1. Support Undo / Redo.
+2. Support ELF format.
+3. Saving an entire app state.
+4. Introduce ViewModel layer. Right now, UI tightly couples rendering and model details.
+This will enable adding Comparison (Diff) tool which can reuse the same model.

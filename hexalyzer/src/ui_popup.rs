@@ -118,9 +118,8 @@ impl PopupState {
 
             ui.label(
                 "The app is built with egui - immediate-mode GUI library. \
-                 The hex parsing and writing is handled by IntelHex library, built as part of the \
-                 same project.\n\nThe app does not support partial file loading so RAM usage \
-                 while working with very large files will be high.",
+                 HEX/BIN parsing and writing is handled by IntelHex standalone library, \
+                 built as part of the same project.",
             );
 
             ui.label("\nCheck out the source code on GitHub:");
