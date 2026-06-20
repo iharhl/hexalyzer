@@ -1,7 +1,7 @@
 use crate::HexViewerApp;
 use crate::app::colors;
 use crate::events;
-use crate::ui_menubar::{SaveFormat, format_from_extension};
+use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -161,7 +161,7 @@ impl PopupState {
         ui.add_space(8.0);
     }
 
-    /// Execute the action for a confirmed popup.
+    /// Execute the action for a confirmed popup
     fn on_confirm(self, app: &mut HexViewerApp) {
         match self {
             Self::ReAddr { addr: address } => {
@@ -293,14 +293,9 @@ impl PopupState {
             return false;
         };
 
-        let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
-
-        let res = match format {
-            SaveFormat::Bin => session.ih.write_bin(path, 0x00),
-            SaveFormat::Hex => session.ih.write_hex(path),
-        };
-        if let Err(msg) = res {
-            app.error = Some(msg.to_string());
+        let kind = loader::kind_from_extension(&path);
+        if let Err(msg) = loader::write_ih_to_path(&mut session.ih, &path, &kind) {
+            app.error = Some(msg);
             return false;
         }
 

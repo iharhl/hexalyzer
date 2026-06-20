@@ -1,25 +1,8 @@
 use crate::HexViewerApp;
 use crate::app::HexSession;
+use crate::loader;
 use crate::ui_popup::PopupState;
 use eframe::egui;
-
-pub enum SaveFormat {
-    Bin,
-    Hex,
-}
-
-pub fn format_from_extension(path: &std::path::Path) -> Option<SaveFormat> {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)?
-        .as_str()
-    {
-        "bin" => Some(SaveFormat::Bin),
-        "hex" => Some(SaveFormat::Hex),
-        _ => None,
-    }
-}
 
 impl HexViewerApp {
     /// Displays the top menu bar with File, Edit, View, and About buttons
@@ -63,14 +46,9 @@ impl HexViewerApp {
                     path.set_extension("bin");
                 }
 
-                let format = format_from_extension(&path).unwrap_or(SaveFormat::Bin);
-
-                let res = match format {
-                    SaveFormat::Bin => curr_session.ih.write_bin(path, 0x00),
-                    SaveFormat::Hex => curr_session.ih.write_hex(path),
-                };
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
+                let kind = loader::kind_from_extension(&path);
+                if let Err(msg) = loader::write_ih_to_path(&mut curr_session.ih, &path, &kind) {
+                    self.error = Some(msg);
                 }
             }
 
