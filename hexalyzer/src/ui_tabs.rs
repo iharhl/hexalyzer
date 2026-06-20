@@ -15,8 +15,14 @@ impl HexViewerApp {
 
         // Estimate width of each tab: name width + padding + close button space
         for session in &self.sessions {
+            let has_changes = session.dirty || !session.editor.modified.is_empty();
+            let display_name = if has_changes {
+                format!("*{}", session.name)
+            } else {
+                session.name.clone()
+            };
             let galley = ui.painter().layout_no_wrap(
-                session.name.clone(),
+                display_name,
                 font_id.clone(),
                 ui.visuals().widgets.active.text_color(),
             );
@@ -89,7 +95,13 @@ impl HexViewerApp {
                         dynamic_width[i],
                         |ui| {
                             // Truncate the name if it is too long for the calculated width
-                            let name = egui::RichText::new(&session.name);
+                            let has_changes = session.dirty || !session.editor.modified.is_empty();
+                            let display_name = if has_changes {
+                                format!("*{}", session.name)
+                            } else {
+                                session.name.clone()
+                            };
+                            let name = egui::RichText::new(display_name);
                             ui.add(egui::Label::new(name).truncate());
 
                             // Close button (with a transparent background)

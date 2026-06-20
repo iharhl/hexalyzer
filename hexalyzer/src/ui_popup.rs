@@ -32,6 +32,10 @@ pub enum PopupState {
         start: String,
         end: String,
     },
+    RemoveRange {
+        start: String,
+        end: String,
+    },
     CloseConfirm {
         session_id: usize,
         reload_after: bool,
@@ -46,6 +50,7 @@ impl PopupState {
             Self::ReAddr { .. } => "Re-Address",
             Self::Merge { .. } => "Merge",
             Self::InsertRange { .. } => "Insert Range",
+            Self::RemoveRange { .. } => "Remove Range",
             Self::CloseConfirm { .. } => "Unsaved Changes",
         }
     }
@@ -87,7 +92,7 @@ impl PopupState {
                 );
                 ui.button(" OK ").clicked() || events.enter_released
             }
-            Self::InsertRange { start, end } => {
+            Self::InsertRange { start, end } | Self::RemoveRange { start, end } => {
                 Self::show_hex_field(ui, "Start address:", start);
                 Self::show_hex_field(ui, "End address (inclusive):", end);
                 ui.button(" OK ").clicked() || events.enter_released
@@ -181,6 +186,8 @@ impl PopupState {
                     return;
                 }
 
+                curr_session.dirty = true;
+
                 if let Some(old_start_addr) = old_start_addr {
                     curr_session.editor.remap_modified(addr, old_start_addr);
                 }
@@ -207,6 +214,36 @@ impl PopupState {
                     return;
                 }
 
+                curr_session.dirty = true;
+
+                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
+                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
+                curr_session.search.redo();
+            }
+            Self::RemoveRange { start, end } => {
+                let start_addr = usize::from_str_radix(&start, 16).ok();
+                let end_addr = usize::from_str_radix(&end, 16).ok();
+
+                let Some((start, end)) = start_addr.zip(end_addr) else {
+                    app.error.replace("Invalid address format".to_string());
+                    return;
+                };
+
+                let Some(curr_session) = app.get_curr_session_mut() else {
+                    return;
+                };
+
+                let size_before = curr_session.ih.size;
+
+                if let Err(err) = curr_session.ih.remove_range(start, end) {
+                    app.error.replace(err.to_string());
+                    return;
+                }
+
+                if curr_session.ih.size != size_before {
+                    curr_session.dirty = true;
+                }
+
                 curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
                     ..=curr_session.ih.get_max_addr().unwrap_or(0);
                 curr_session.search.redo();
@@ -222,6 +259,7 @@ impl PopupState {
                 app.merge_file_into_curr_session(&path, addr1, addr2);
 
                 if let Some(curr_session) = app.get_curr_session_mut() {
+                    curr_session.dirty = true;
                     curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
                         ..=curr_session.ih.get_max_addr().unwrap_or(0);
                     curr_session.search.redo();
