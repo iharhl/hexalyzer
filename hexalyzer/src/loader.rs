@@ -1,5 +1,6 @@
 use crate::app::{HexSession, HexViewerApp};
 use crate::byteedit::ByteEdit;
+use eframe::egui;
 use intelhexlib::IntelHex;
 use std::fs::File;
 use std::io::Read;
@@ -242,6 +243,87 @@ impl HexViewerApp {
         session.last_modified =
             get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         session.file_changed_on_disk = false;
+    }
+
+    /// Show an Export dialog and write a copy of the current session to the chosen path.
+    /// The original session is untouched.
+    ///
+    /// The format is derived from the extension (defaults to `.bin`).
+    ///
+    /// Returns `true` on success.
+    pub(crate) fn export_curr_session(&mut self) -> bool {
+        let Some(curr_index) = self.active_index else {
+            return false;
+        };
+
+        let path = self.get_curr_session().and_then(|s| {
+            rfd::FileDialog::new()
+                .set_title("Export")
+                .set_file_name(s.name.clone())
+                .save_file()
+        });
+
+        let Some(mut path) = path else {
+            return false;
+        };
+
+        if path.extension().is_none() {
+            path.set_extension("bin");
+        }
+
+        let gap_fill = self.gap_fill;
+        let kind = kind_from_extension(&path);
+
+        let Some(session) = self.get_curr_session_mut() else {
+            return false;
+        };
+
+        if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &kind, gap_fill) {
+            self.error = Some(msg);
+            return false;
+        }
+
+        match self.sessions.iter().position(|s| s.ih.filepath == path) {
+            // Export over the current file itself is equivalent to a save
+            Some(index) if index == curr_index => {
+                let session = &mut self.sessions[index];
+                session.editor.modified.clear();
+                session.dirty = false;
+                session.file_kind = kind;
+                session.last_modified =
+                    get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                session.file_changed_on_disk = false;
+            }
+            // Export over a file in another tab - refresh that tab and switch to it
+            Some(index) => {
+                self.reload_file(index);
+                self.active_index = Some(index);
+            }
+            // Open exported copy in a new tab and switch to it
+            None => self.load_file(&path),
+        }
+
+        true
+    }
+
+    /// Intercepts save shortcut at the start of the frame and performs the save
+    /// of the current session to its file if it has unsaved changes.
+    pub(crate) fn handle_save_shortcut(&mut self, ctx: &egui::Context) {
+        let pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        if !pressed || self.popup.active {
+            return;
+        }
+
+        let Some(session_id) = self.active_index else {
+            return;
+        };
+        let has_filepath = self
+            .get_curr_session()
+            .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
+
+        if has_filepath && self.has_unsaved_changes(session_id) {
+            self.save_curr_session();
+        }
     }
 
     /// Merges the content of a file into the current `IntelHex` session.

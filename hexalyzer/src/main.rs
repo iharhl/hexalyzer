@@ -71,6 +71,7 @@ impl eframe::App for HexViewerApp {
         // Collect input events once per frame
         self.events = events::collect_ui_events_ctx(&ctx);
         self.handle_copy_shortcut(&ctx);
+        self.handle_save_shortcut(&ctx);
 
         self.show_menu_bar(ui);
 
