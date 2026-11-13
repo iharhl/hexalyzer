@@ -88,6 +88,63 @@ pub fn write_ih_to_path(
     }
 }
 
+/// Gap-fill size above which a `.bin` write must be confirmed by the user
+const LARGE_GAP_FILL_SIZE: usize = 64 * 1024 * 1024;
+
+/// Number of gap-fill bytes a `.bin` write adds on top of the actual data.
+pub fn bin_gap_fill_size(ih: &IntelHex) -> usize {
+    match (ih.get_min_addr(), ih.get_max_addr()) {
+        (Some(min), Some(max)) => (max - min).saturating_add(1).saturating_sub(ih.size),
+        _ => 0,
+    }
+}
+
+/// Format a byte count for display, e.g. `512 B`, `1.5 KiB`, `4.0 GiB`
+pub fn format_size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+
+    let bytes = bytes as u128;
+    let mut unit = 1024u128;
+    let mut idx = 0;
+    while idx + 1 < UNITS.len() && bytes >= unit * 1024 {
+        unit *= 1024;
+        idx += 1;
+    }
+    let tenths = bytes * 10 / unit;
+    format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[idx])
+}
+
+/// Ask the user to confirm a `.bin` write that is mostly gap fill.
+/// Returns `true` if the write should proceed.
+fn confirm_large_write(ih: &IntelHex, kind: &FileKind) -> bool {
+    if *kind != FileKind::Bin {
+        return true;
+    }
+
+    let gap_fill = bin_gap_fill_size(ih);
+    if gap_fill < LARGE_GAP_FILL_SIZE {
+        return true;
+    }
+
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Large file")
+        .set_description(format!(
+            "This will write a {} binary file: {} of data, the rest is gap fill.\n\n\
+             Continue?",
+            format_size(gap_fill.saturating_add(ih.size)),
+            format_size(ih.size),
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show();
+
+    matches!(result, rfd::MessageDialogResult::Ok)
+}
+
 impl HexViewerApp {
     /// Load hex file from disk and add it to the list of opened sessions.
     /// If the file is already open, switch to it.
@@ -215,7 +272,8 @@ impl HexViewerApp {
     /// Writes in the same format the file was loaded as.
     /// Clears the dirty state on success.
     ///
-    /// Returns `true` on success. On failure, the error is stored in `self.error`.
+    /// Returns `true` on success. Returns `false` if the write failed (error stored in
+    /// `self.error`) or the user canceled a large-file confirmation.
     pub(crate) fn save_curr_session(&mut self) -> bool {
         let gap_fill = self.gap_fill;
 
@@ -230,6 +288,10 @@ impl HexViewerApp {
         }
 
         let file_kind = session.file_kind.clone();
+
+        if !confirm_large_write(&session.ih, &file_kind) {
+            return false;
+        }
 
         if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &file_kind, gap_fill) {
             self.error = Some(msg);
@@ -281,6 +343,10 @@ impl HexViewerApp {
         let Some(session) = self.get_curr_session_mut() else {
             return false;
         };
+
+        if !confirm_large_write(&session.ih, &kind) {
+            return false;
+        }
 
         if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &kind, gap_fill) {
             self.error = Some(msg);

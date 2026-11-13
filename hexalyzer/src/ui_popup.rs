@@ -1,8 +1,13 @@
 use crate::HexViewerApp;
 use crate::app::colors;
 use crate::events;
+use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
+
+/// Maximum size of a range that can be inserted at once. Guards against typos
+/// allocating gigabytes on the UI thread.
+const MAX_INSERT_RANGE_SIZE: usize = 256 * 1024 * 1024;
 
 //  ========================== Close Action ================================== //
 
@@ -202,6 +207,15 @@ impl PopupState {
                     app.error.replace("Invalid address format".to_string());
                     return;
                 };
+
+                if end.saturating_sub(start) >= MAX_INSERT_RANGE_SIZE {
+                    app.error.replace(format!(
+                        "Range is too large: {} (max {})",
+                        loader::format_size((end - start).saturating_add(1)),
+                        loader::format_size(MAX_INSERT_RANGE_SIZE)
+                    ));
+                    return;
+                }
 
                 let Some(curr_session) = app.get_curr_session_mut() else {
                     return;
