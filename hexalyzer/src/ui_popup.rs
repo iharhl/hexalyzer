@@ -1,7 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::colors;
 use crate::events;
-use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -10,7 +9,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloseAction {
     Save,
-    SaveAs,
+    Export,
     DontSave,
 }
 
@@ -290,8 +289,8 @@ impl PopupState {
                     app.close_file(session_id);
                 }
             }
-            CloseAction::SaveAs => {
-                if !Self::save_as_dialog(app) {
+            CloseAction::Export => {
+                if !app.export_curr_session() {
                     return;
                 }
                 if reload_after {
@@ -308,42 +307,6 @@ impl PopupState {
                 }
             }
         }
-    }
-
-    /// Show the Save-As dialog for the current session. Returns `true` on success.
-    fn save_as_dialog(app: &mut HexViewerApp) -> bool {
-        let path = app.get_curr_session().and_then(|s| {
-            rfd::FileDialog::new()
-                .set_title("Save As")
-                .set_file_name(s.name.clone())
-                .save_file()
-        });
-
-        let Some(mut path) = path else {
-            return false;
-        };
-
-        if path.extension().is_none() {
-            path.set_extension("bin");
-        }
-
-        let gap_fill = app.gap_fill;
-
-        let Some(session) = app.get_curr_session_mut() else {
-            return false;
-        };
-
-        let kind = loader::kind_from_extension(&path);
-        if let Err(msg) = loader::write_ih_to_path(&mut session.ih, &path, &kind, gap_fill) {
-            app.error = Some(msg);
-            return false;
-        }
-
-        let Some(session) = app.get_curr_session_mut() else {
-            return false;
-        };
-        session.editor.modified.clear();
-        true
     }
 }
 
@@ -442,8 +405,8 @@ impl HexViewerApp {
                     if ui.button("Save").clicked() {
                         chosen_action = Some(CloseAction::Save);
                     }
-                    if ui.button("Save As...").clicked() {
-                        chosen_action = Some(CloseAction::SaveAs);
+                    if ui.button("Export...").clicked() {
+                        chosen_action = Some(CloseAction::Export);
                     }
                     if ui.button("Don't Save").clicked() {
                         chosen_action = Some(CloseAction::DontSave);

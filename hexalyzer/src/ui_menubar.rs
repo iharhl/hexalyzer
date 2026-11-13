@@ -1,6 +1,5 @@
 use crate::HexViewerApp;
 use crate::app::HexSession;
-use crate::loader;
 use crate::ui_popup::PopupState;
 use eframe::egui;
 
@@ -35,27 +34,35 @@ impl HexViewerApp {
                 self.load_file(&path);
             }
 
-            // EXPORT BUTTON
-            let gap_fill = self.gap_fill;
-            if ui
-                .add_enabled(has_file, egui::Button::new("Export file..."))
-                .clicked()
-                && let Some(curr_session) = self.get_curr_session_mut()
-                && let Some(mut path) = rfd::FileDialog::new()
-                    .set_title("Save As")
-                    .set_file_name(curr_session.name.clone())
-                    .save_file()
-            {
-                if path.extension().is_none() {
-                    path.set_extension("bin");
-                }
+            let has_filepath = self
+                .get_curr_session()
+                .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
+            let has_changes = self
+                .active_index
+                .is_some_and(|id| self.has_unsaved_changes(id));
 
-                let kind = loader::kind_from_extension(&path);
-                if let Err(msg) =
-                    loader::write_ih_to_path(&mut curr_session.ih, &path, &kind, gap_fill)
-                {
-                    self.error = Some(msg);
-                }
+            // SAVE BUTTON
+            let save_shortcut = if cfg!(target_os = "macos") {
+                "Cmd+S"
+            } else {
+                "Ctrl+S"
+            };
+            if ui
+                .add_enabled(
+                    has_filepath && has_changes,
+                    egui::Button::new("Save").shortcut_text(save_shortcut),
+                )
+                .clicked()
+            {
+                self.save_curr_session();
+            }
+
+            // EXPORT BUTTON
+            if ui
+                .add_enabled(has_file, egui::Button::new("Export..."))
+                .clicked()
+            {
+                self.export_curr_session();
             }
 
             // GAP FILL SUBMENU
@@ -69,10 +76,6 @@ impl HexViewerApp {
             });
 
             // RELOAD BUTTON
-            let has_filepath = self
-                .get_curr_session()
-                .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
-
             if ui
                 .add_enabled(has_filepath, egui::Button::new("Reload"))
                 .clicked()

@@ -66,8 +66,9 @@ tools:
 #### File
 
 - `Open file`: Browse your system to load a file into a new tab.
-- `Export file`: Save your current session to a new file.
-- `Gap Fill`: Setting for export to fill gaps with specific bytes.
+- `Save` (`Cmd+S` / `Ctrl+S`): Overwrite the current file with your changes (in its original format).
+- `Export`: Save a copy of your current session to a new file (format chosen by extension) and open it in a new tab.
+- `Gap Fill`: Setting for export to BIN to fill gaps with specific bytes.
 - `Reload`: Reload the current file from disk.
 - `Close file`: Close the current tab.
 
