@@ -190,7 +190,7 @@ impl HexSession {
 }
 
 fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len().is_multiple_of(2) {
+    if s.is_ascii() && s.len().is_multiple_of(2) {
         return (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())

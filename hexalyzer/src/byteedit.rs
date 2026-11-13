@@ -59,25 +59,19 @@ impl HexSession {
             return;
         }
 
+        // If other bytes got selected mid-edit - clear the pending edit
+        if self.editor.in_progress && self.editor.addr != self.selection.range {
+            self.editor.clear();
+        }
+
         for &ch in typed_chars {
-            if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
-            {
-                // Start editing if user types a hex char
-                if ch.is_ascii_hexdigit() {
-                    self.editor.in_progress = true;
-                    self.editor.addr = self.selection.range;
-                    self.editor.buffer = ch.to_ascii_uppercase().to_string();
-                }
-            } else if self.editor.in_progress {
-                // If other bytes got selected - clear and return
-                if self.editor.addr != self.selection.range {
-                    self.editor.clear();
-                }
+            // Allow only hex chars
+            if !ch.is_ascii_hexdigit() {
+                continue;
+            }
 
-                self.editor.buffer.insert(1, ch);
-
-                // Allow only hex chars
-                self.editor.buffer.retain(|c| c.is_ascii_hexdigit());
+            if self.editor.in_progress {
+                self.editor.buffer.push(ch.to_ascii_uppercase());
 
                 // When two hex chars are entered - commit automatically
                 if self.editor.buffer.len() == 2 {
@@ -107,6 +101,11 @@ impl HexSession {
                     }
                     self.editor.clear();
                 }
+            } else if self.selection.range.is_some() && self.selection.released {
+                // Start editing if there is a finished selection
+                self.editor.in_progress = true;
+                self.editor.addr = self.selection.range;
+                self.editor.buffer = ch.to_ascii_uppercase().to_string();
             }
         }
     }
