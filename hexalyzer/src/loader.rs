@@ -145,6 +145,38 @@ fn confirm_large_write(ih: &IntelHex, kind: &FileKind) -> bool {
     matches!(result, rfd::MessageDialogResult::Ok)
 }
 
+/// Returns `true` if the file at `path` was modified on disk since `last_modified`
+/// (the time it was loaded or last saved by this app).
+fn changed_on_disk(path: &PathBuf, last_modified: std::time::SystemTime) -> bool {
+    get_last_modified(path)
+        .is_ok_and(|t| t != std::time::SystemTime::UNIX_EPOCH && t != last_modified)
+}
+
+/// Ask the user to confirm overwriting a file that was modified on disk since it was
+/// loaded. Returns `true` if the write should proceed.
+fn confirm_overwrite_if_changed(path: &PathBuf, last_modified: std::time::SystemTime) -> bool {
+    if !changed_on_disk(path, last_modified) {
+        return true;
+    }
+
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("File changed on disk")
+        .set_description(format!(
+            "\"{name}\" has been modified on disk since it was opened.\n\n\
+             Overwrite it with your version? The changes on disk will be lost."
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show();
+
+    matches!(result, rfd::MessageDialogResult::Ok)
+}
+
 impl HexViewerApp {
     /// Load hex file from disk and add it to the list of opened sessions.
     /// If the file is already open, switch to it.
@@ -288,6 +320,10 @@ impl HexViewerApp {
         }
 
         let file_kind = session.file_kind.clone();
+
+        if !confirm_overwrite_if_changed(&path, session.last_modified) {
+            return false;
+        }
 
         if !confirm_large_write(&session.ih, &file_kind) {
             return false;
