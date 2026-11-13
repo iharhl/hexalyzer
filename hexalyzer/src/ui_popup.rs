@@ -280,32 +280,25 @@ impl PopupState {
             .take()
             .unwrap_or(CloseAction::DontSave);
 
-        match action {
-            CloseAction::Save => {
-                app.save_curr_session();
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
-            CloseAction::Export => {
-                if !app.export_curr_session() {
-                    return;
-                }
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
-            CloseAction::DontSave => {
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
+        // Swap the active session to the one being closed (in case the user
+        // closes the tab that is not in the view)
+        app.active_index = Some(session_id);
+
+        let saved = match action {
+            CloseAction::Save => app.save_curr_session(),
+            CloseAction::Export => app.export_curr_session(),
+            CloseAction::DontSave => true,
+        };
+
+        // Keep the tab (and its edits) if saving failed or was canceled
+        if !saved {
+            return;
+        }
+
+        if reload_after {
+            app.reload_file(session_id);
+        } else {
+            app.close_file(session_id);
         }
     }
 }

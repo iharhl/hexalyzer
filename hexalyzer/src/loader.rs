@@ -214,28 +214,30 @@ impl HexViewerApp {
     /// Save the current session back to its original file path.
     /// Writes in the same format the file was loaded as.
     /// Clears the dirty state on success.
-    pub(crate) fn save_curr_session(&mut self) {
+    ///
+    /// Returns `true` on success. On failure, the error is stored in `self.error`.
+    pub(crate) fn save_curr_session(&mut self) -> bool {
         let gap_fill = self.gap_fill;
 
         let Some(session) = self.get_curr_session_mut() else {
-            return;
+            return false;
         };
 
         let path = session.ih.filepath.clone();
         if path.as_os_str().is_empty() {
             self.error = Some("No file path associated with this session".into());
-            return;
+            return false;
         }
 
         let file_kind = session.file_kind.clone();
 
         if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &file_kind, gap_fill) {
             self.error = Some(msg);
-            return;
+            return false;
         }
 
         let Some(session) = self.get_curr_session_mut() else {
-            return;
+            return false;
         };
 
         session.editor.modified.clear();
@@ -243,6 +245,8 @@ impl HexViewerApp {
         session.last_modified =
             get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         session.file_changed_on_disk = false;
+
+        true
     }
 
     /// Show an Export dialog and write a copy of the current session to the chosen path.
