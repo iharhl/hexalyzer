@@ -75,7 +75,7 @@ impl HexSession {
         }
 
         // Update byte edit buffer based on the key press
-        self.update_edit_buffer(&events.hex_chars_released);
+        self.update_edit_buffer(&events.hex_chars);
 
         // Cancel byte editing / selection on Esc press
         if events.escape_pressed {

@@ -9,37 +9,12 @@ pub struct PointerState {
 #[derive(Default, Clone)]
 pub struct EventState {
     pub(crate) last_key_released: Option<egui::Key>,
-    pub(crate) hex_chars_released: Vec<char>,
+    pub(crate) hex_chars: Vec<char>,
     pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
     pub(crate) shift_down: bool,
     pub(crate) arrow_key_released: Option<egui::Key>,
-}
-
-#[allow(clippy::enum_glob_use)]
-/// Helper for mapping keys to hex chars
-const fn key_to_hex_char(key: egui::Key) -> Option<char> {
-    use egui::Key::*;
-    Some(match key {
-        Num0 => '0',
-        Num1 => '1',
-        Num2 => '2',
-        Num3 => '3',
-        Num4 => '4',
-        Num5 => '5',
-        Num6 => '6',
-        Num7 => '7',
-        Num8 => '8',
-        Num9 => '9',
-        A => 'A',
-        B => 'B',
-        C => 'C',
-        D => 'D',
-        E => 'E',
-        F => 'F',
-        _ => return None,
-    })
 }
 
 /// Collect events once per frame from an `egui::Ui` reference and return an aggregated state.
@@ -64,39 +39,40 @@ fn collect_inner(i: &egui::InputState) -> EventState {
         ..Default::default()
     };
 
-    // Key press events (only consider key releases)
     for event in &i.events {
-        if let egui::Event::Key {
-            key,
-            pressed: false,
-            modifiers,
-            ..
-        } = event
-        {
-            state.last_key_released = Some(*key);
-
-            // Store Enter key release directly
-            if state.last_key_released == Some(egui::Key::Enter) {
-                state.enter_released = true;
+        match event {
+            // Take hex chars from text input (not raw keys), so that shortcuts like
+            // Cmd+C never count as typing, even if Cmd is released before C
+            egui::Event::Text(text) => {
+                state
+                    .hex_chars
+                    .extend(text.chars().filter(char::is_ascii_hexdigit));
             }
+            // Key release events
+            egui::Event::Key {
+                key,
+                pressed: false,
+                ..
+            } => {
+                state.last_key_released = Some(*key);
 
-            // Store arrow keys release directly
-            if matches!(
-                *key,
-                egui::Key::ArrowLeft
-                    | egui::Key::ArrowRight
-                    | egui::Key::ArrowUp
-                    | egui::Key::ArrowDown
-            ) {
-                state.arrow_key_released = Some(*key);
-            }
+                // Store Enter key release directly
+                if state.last_key_released == Some(egui::Key::Enter) {
+                    state.enter_released = true;
+                }
 
-            if !modifiers.command
-                && !modifiers.alt
-                && let Some(ch) = key_to_hex_char(*key)
-            {
-                state.hex_chars_released.push(ch);
+                // Store arrow keys release directly
+                if matches!(
+                    *key,
+                    egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowDown
+                ) {
+                    state.arrow_key_released = Some(*key);
+                }
             }
+            _ => {}
         }
     }
 
