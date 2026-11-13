@@ -438,54 +438,57 @@ impl HexViewerApp {
     /// - `path`: Reference to a `PathBuf` that represents the path of the file to be merged.
     /// - `addr1`: Optional start addr to which the current session's `IntelHex` instance should be relocated.
     /// - `addr2`: Optional start addr to which the contents of the new file should be relocated.
+    ///
+    /// Returns `true` if the merge was applied. On failure, the current session is left
+    /// unchanged and the error is stored.
     pub(crate) fn merge_file_into_curr_session(
         &mut self,
         path: &PathBuf,
         addr1: Option<usize>,
         addr2: Option<usize>,
-    ) {
-        if let Some(cur_session) = self.get_curr_session_mut() {
-            // Relocate the current file to a new start address
-            if let Some(new_start_addr) = addr1 {
-                let old_start_addr = cur_session.ih.get_min_addr();
-
-                let res = cur_session.ih.relocate(new_start_addr);
-
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
-                    return;
-                }
-
-                if let Some(old_start_addr) = old_start_addr {
-                    cur_session
-                        .editor
-                        .remap_modified(new_start_addr, old_start_addr);
-                }
+    ) -> bool {
+        // Load and relocate the selected file first. These steps can fail and must not
+        // leave the current session half-modified.
+        let (mut new_ih, _) = match load_file_into_ih(path) {
+            Ok(result) => result,
+            Err(msg) => {
+                self.error = Some(msg);
+                return false;
             }
+        };
 
-            // Load the selected file into a new IntelHex instance
-            let (mut new_ih, _) = match load_file_into_ih(path) {
-                Ok(result) => result,
-                Err(msg) => {
-                    self.error = Some(msg);
-                    return;
-                }
-            };
-
-            // Relocate the selected file to a new start address
-            if let Some(new_start_addr) = addr2 {
-                let res = new_ih.relocate(new_start_addr);
-
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
-                    return;
-                }
-            }
-
-            // Merge the two IntelHex instances
-            cur_session.ih.merge(&new_ih);
-        } else {
-            self.error = Some("Could not get current hex session".to_string());
+        if let Some(new_start_addr) = addr2
+            && let Err(err) = new_ih.relocate(new_start_addr)
+        {
+            self.error = Some(err.to_string());
+            return false;
         }
+
+        let Some(cur_session) = self.get_curr_session_mut() else {
+            self.error = Some("Could not get current hex session".to_string());
+            return false;
+        };
+
+        // Relocate the current file to a new start address.
+        // `relocate` validates before changing anything, so on error the session is unchanged.
+        if let Some(new_start_addr) = addr1 {
+            let old_start_addr = cur_session.ih.get_min_addr();
+
+            if let Err(err) = cur_session.ih.relocate(new_start_addr) {
+                self.error = Some(err.to_string());
+                return false;
+            }
+
+            if let Some(old_start_addr) = old_start_addr {
+                cur_session
+                    .editor
+                    .remap_modified(new_start_addr, old_start_addr);
+            }
+        }
+
+        // Merge the two IntelHex instances (cannot fail)
+        cur_session.ih.merge(&new_ih);
+
+        true
     }
 }

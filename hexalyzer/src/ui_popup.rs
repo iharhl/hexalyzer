@@ -268,9 +268,10 @@ impl PopupState {
                 let addr1 = usize::from_str_radix(&addr_current, 16).ok();
                 let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
 
-                app.merge_file_into_curr_session(&path, addr1, addr2);
-
-                if let Some(curr_session) = app.get_curr_session_mut() {
+                // Only mark as modified if the merge was actually applied
+                if app.merge_file_into_curr_session(&path, addr1, addr2)
+                    && let Some(curr_session) = app.get_curr_session_mut()
+                {
                     curr_session.dirty = true;
                     curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
                         ..=curr_session.ih.get_max_addr().unwrap_or(0);
