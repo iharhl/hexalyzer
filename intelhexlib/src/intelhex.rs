@@ -1331,7 +1331,8 @@ impl IntelHex {
     }
 
     /// Window slide search for a byte array in the `IntelHex` data.
-    /// Returns start addresses of matches.
+    /// Returns start addresses of matches, sorted in ascending order.
+    /// Matches may overlap.
     ///
     /// # Example
     /// ```
@@ -1348,7 +1349,7 @@ impl IntelHex {
     }
 
     /// Window slide search for an ASCII string in the `IntelHex` data.
-    /// Returns start addresses of matches.
+    /// Returns start addresses of matches, sorted in ascending order.
     ///
     /// If `regex` flag is set to true, the pattern is interpreted as a regular expression.
     /// Otherwise, it is interpreted as a literal string.

@@ -283,17 +283,10 @@ impl HexSession {
             return;
         }
 
-        if !self.search.results.is_empty() {
-            // If search active -> highlight if inside search results (2nd prio)
-            let is_inside_match = self.search.results.iter().any(|&start| {
-                let end = start.saturating_add(self.search.length);
-                (start..end).contains(&addr)
-            });
-
-            if is_inside_match {
-                ui.painter().rect_filled(widget.rect, 0.0, colors::GREEN);
-                return;
-            }
+        if self.search.is_hit(addr) {
+            // If inside search results -> highlight (2nd prio)
+            ui.painter().rect_filled(widget.rect, 0.0, colors::GREEN);
+            return;
         }
 
         if self.editor.modified.contains_key(&addr) {

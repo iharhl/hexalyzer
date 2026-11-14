@@ -22,7 +22,7 @@ struct SearchState {
 pub struct Search {
     /// Start address of the search results
     pub(crate) addr: Option<usize>,
-    /// List of addresses where the match was found
+    /// List of addresses where the match was found (sorted ascending)
     pub(crate) results: Vec<usize>,
     /// Length of the search pattern in bytes
     pub(crate) length: usize,
@@ -30,6 +30,8 @@ pub struct Search {
     pub(crate) has_focus: bool,
     /// Index of the current search result
     idx: usize,
+    /// Address of the current search result before a redo
+    resume_from: Option<usize>,
 
     // -- UI control flags
     /// Force the search to be performed even if the input is the same as the last one
@@ -54,6 +56,7 @@ impl Search {
         // Do not clear current to preserve text box content
         self.last = SearchState::default();
         self.idx = 0;
+        self.resume_from = None;
         self.force = false;
     }
 
@@ -62,8 +65,12 @@ impl Search {
         // In case the current input field is not valid
         self.current = self.last.clone();
 
+        // Remember the current hit to keep the position after the redo
+        let resume_from = self.results.get(self.idx).copied();
+
         // Clear
         self.clear();
+        self.resume_from = resume_from;
 
         // Set force flag
         self.force = true;
@@ -72,6 +79,15 @@ impl Search {
     /// Force to loose focus from the text field
     pub(crate) const fn loose_focus(&mut self) {
         self.loose_focus = true;
+    }
+
+    /// Check if `addr` lies inside the search match.
+    ///
+    /// Relies on `results` being sorted ascending. The last match starting at
+    /// or before `addr` is the only one that can cover it.
+    pub(crate) fn is_hit(&self, addr: usize) -> bool {
+        let n = self.results.partition_point(|&start| start <= addr);
+        n > 0 && addr < self.results[n - 1].saturating_add(self.length)
     }
 }
 
@@ -159,9 +175,21 @@ impl HexSession {
                     self.search.results.clear();
                 }
 
+                // Verify that the results are sorted which is required for
+                // correct highlighting of the search hit.
+                debug_assert!(self.search.results.is_sorted());
+
                 // Reset the state of search
                 self.search.idx = 0;
                 self.search.last = self.search.current.clone();
+
+                // After a redo -> select closest hit
+                if let Some(addr) = self.search.resume_from.take() {
+                    let i = self.search.results.partition_point(|&start| start < addr);
+                    if i < self.search.results.len() {
+                        self.search.idx = i;
+                    }
+                }
             }
 
             // Set address to scroll to (only if not forced)
