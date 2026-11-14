@@ -2919,8 +2919,12 @@ mod tests {
 
 #[allow(clippy::items_after_test_module)]
 impl IntelHex {
+    /// Parse raw Intel HEX bytes without file I/O (benchmark-only access to `parse`).
+    ///
+    /// # Errors
+    /// Returns the parser's error if `raw_bytes` is not valid Intel HEX.
     #[cfg(feature = "benchmarking")]
-    pub fn bench_priv_parse(ih: &mut Self, raw_bytes: &[u8]) {
-        let _ = ih.parse(raw_bytes);
+    pub fn bench_priv_parse(ih: &mut Self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
+        ih.parse(raw_bytes)
     }
 }

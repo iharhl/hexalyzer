@@ -25,6 +25,7 @@ cli = []
 name = "benchmark"
 harness = false
 path = "benches/benchmark.rs"
+required-features = ["benchmarking"]
 
 [dependencies]
 regex = "1.12.2"
