@@ -119,14 +119,13 @@ mod tests {
     #[test]
     fn test_search_ascii_regex() {
         // Arrange
-        let rng = rand::rng();
+        let mut rng = rand::rng();
         let start_addr = 0x1000;
         let pattern = vec![0x37, 0x37, 0x4C, 0x6F, 0x4C]; // "77LoL" in ASCII
 
-        let mut random_bytes: Vec<u8> = rng
-            .sample_iter(rand::distr::StandardUniform)
-            .take(1000)
-            .collect();
+        // Filler is limited to 0x40..0x80: ASCII without digits, so it can never
+        // contain `\d` and the regex cannot match anywhere except the planted pattern
+        let mut random_bytes: Vec<u8> = (0..1000).map(|_| rng.random_range(0x40..0x80)).collect();
         random_bytes[203..208].copy_from_slice(&pattern); // replace elements with the pattern
 
         let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(start_addr, random_bytes)]);

@@ -1969,10 +1969,10 @@ mod tests {
     #[test]
     fn test_merge_safe_invalid() {
         type Case = (
-            &'static str,           // case name
-            Vec<(usize, Vec<u8>)>,  // chunks of the other file
-            Option<[u8; 18]>,       // start address record
-            IntelHexErrorKind,      // expected error
+            &'static str,          // case name
+            Vec<(usize, Vec<u8>)>, // chunks of the other file
+            Option<[u8; 18]>,      // start address record
+            IntelHexErrorKind,     // expected error
         );
 
         // :04000005112233444D
