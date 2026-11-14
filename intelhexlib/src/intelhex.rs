@@ -1190,10 +1190,12 @@ impl IntelHex {
     }
 
     /// Merge another `IntelHex` instance into this one.
+    /// The merge is atomic: on error, this instance is left unchanged.
     ///
     /// # Errors
     /// Returns an error if any data chunks overlap.
-    /// Returns an error if both this and other `IntelHex` instance have start address record.
+    /// Returns an error if both this and other `IntelHex` instance have a start address
+    /// record and the records differ. Identical records are accepted.
     ///
     /// # Example
     /// ```
@@ -1208,62 +1210,38 @@ impl IntelHex {
     /// assert!(res.is_ok());
     /// ```
     pub fn merge_safe(&mut self, other: &Self) -> Result<(), IntelHexError> {
-        for (&chunk_start, chunk_data) in &other.buffer {
-            let end_addr = chunk_start + chunk_data.len();
+        // Validate everything first, so that on error this instance is left unchanged
 
-            // Check for overlaps
-            self.check_no_overlap(chunk_start, end_addr)
+        // Both files have a start address record, and they differ
+        if let (Some(own), Some(incoming)) = (self.start_addr, other.start_addr)
+            && own != incoming
+        {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::DuplicateStartAddress,
+            ));
+        }
+
+        // Chunks of `other` never overlap each other, so checking each one against
+        // the current buffer is enough
+        for (&chunk_start, chunk_data) in &other.buffer {
+            self.check_no_overlap(chunk_start, chunk_start + chunk_data.len())
                 .map_err(|overlap_addr| {
                     IntelHexError::UpdateError(IntelHexErrorKind::RecordAddressOverlap(
                         overlap_addr,
                     ))
                 })?;
-
-            // Insert the chunk if no overlaps
-            self.buffer.insert(chunk_start, chunk_data.clone());
-            self.size += chunk_data.len();
         }
 
-        // If both files have a start address, return an error
-        if self.start_addr.is_some() && other.start_addr.is_some() {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::DuplicateStartAddress,
-            ));
+        // Insert chunks (cannot fail). Adjacent ones are merged.
+        for (&chunk_start, chunk_data) in &other.buffer {
+            self.insert_chunk_with_merge(chunk_start, chunk_data.clone());
+            self.size += chunk_data.len();
         }
 
         // Use the start address from the other file if we don't have one
         if self.start_addr.is_none() {
             self.start_addr = other.start_addr;
         }
-
-        // Go through the buffer and merge adjacent chunks (if any)
-
-        if self.buffer.len() < 2 {
-            return Ok(());
-        }
-
-        let mut new_buf = BTreeMap::<usize, Vec<u8>>::new();
-        let mut iter = std::mem::take(&mut self.buffer).into_iter();
-
-        if let Some((mut cur_start, mut cur_data)) = iter.next() {
-            let mut cur_end = cur_start + cur_data.len();
-
-            for (start, mut data) in iter {
-                if start == cur_end {
-                    cur_end += data.len();
-                    cur_data.append(&mut data);
-                } else {
-                    new_buf.insert(cur_start, cur_data);
-                    cur_start = start;
-                    cur_data = data;
-                    cur_end = cur_start + cur_data.len();
-                }
-            }
-
-            new_buf.insert(cur_start, cur_data);
-        }
-
-        self.buffer = new_buf;
 
         Ok(())
     }
@@ -1990,75 +1968,113 @@ mod tests {
 
     #[test]
     fn test_merge_safe_invalid() {
+        type Case = (
+            &'static str,           // case name
+            Vec<(usize, Vec<u8>)>,  // chunks of the other file
+            Option<[u8; 18]>,       // start address record
+            IntelHexErrorKind,      // expected error
+        );
+
+        // :04000005112233444D
+        let start_addr_a = [
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ];
+        // :04000005556677883D
+        let start_addr_b = [
+            48, 52, 48, 48, 48, 48, 48, 53, 53, 53, 54, 54, 55, 55, 56, 56, 51, 68,
+        ];
+
         // Arrange
         let mut ih1 = IntelHex::new();
         ih1.buffer.insert(0x20, vec![0x0, 0x0, 0x0, 0x0]);
         ih1.size = 4;
-        ih1.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
+        ih1.start_addr = Some(start_addr_a);
+        let original = ih1.clone();
 
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x1E, vec![0x1, 0x1, 0x1]); // overlap from left side
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x20)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x22, vec![0x1]); // overlap within
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x22)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x23, vec![0x1, 0x1, 0x1]); // overlap from right side
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x23)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x80, vec![0x1, 0x1]); // no overlap
-        ih2.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
+        let cases: Vec<Case> = vec![
+            (
+                "overlap from left side",
+                vec![(0x1E, vec![0x1, 0x1, 0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x20),
+            ),
+            (
+                "overlap within",
+                vec![(0x22, vec![0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x22),
+            ),
+            (
+                "overlap from right side",
+                vec![(0x23, vec![0x1, 0x1, 0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x23),
+            ),
+            (
+                "valid chunks (incl. adjacent) before an overlapping one",
+                vec![
+                    (0x00, vec![0x1, 0x1]),
+                    (0x1E, vec![0x1, 0x1]),
+                    (0x23, vec![0x1]),
+                ],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x23),
+            ),
+            (
+                "different start address, adjacent chunks",
+                vec![(0x1E, vec![0x1, 0x1]), (0x24, vec![0x1, 0x1])],
+                Some(start_addr_b),
                 IntelHexErrorKind::DuplicateStartAddress,
-            ))
+            ),
+        ];
+
+        for (name, chunks, start_addr, expected) in cases {
+            let mut ih2 = IntelHex::new();
+            for (addr, data) in chunks {
+                ih2.size += data.len();
+                ih2.buffer.insert(addr, data);
+            }
+            ih2.start_addr = start_addr;
+
+            // Act
+            let res = ih1.merge_safe(&ih2);
+
+            // Assert - error is returned and `ih1` is left unchanged
+            assert_eq!(res, Err(IntelHexError::UpdateError(expected)), "{name}");
+            assert_eq!(ih1.buffer, original.buffer, "{name}");
+            assert_eq!(ih1.size, original.size, "{name}");
+            assert_eq!(ih1.start_addr, original.start_addr, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_merge_safe_identical_start_addr() {
+        // Arrange
+        let start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        let mut ih1 = IntelHex::new();
+        ih1.buffer.insert(0x20, vec![0x0, 0x0]);
+        ih1.size = 2;
+        ih1.start_addr = start_addr;
+
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x22, vec![0x1, 0x1]);
+        ih2.size = 2;
+        ih2.start_addr = start_addr;
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(
+            ih1.buffer,
+            BTreeMap::from([(0x20, vec![0x0, 0x0, 0x1, 0x1])])
         );
+        assert_eq!(ih1.size, 4);
+        assert_eq!(ih1.start_addr, start_addr);
     }
 
     #[test]
