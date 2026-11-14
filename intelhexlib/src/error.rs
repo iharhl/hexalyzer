@@ -111,6 +111,8 @@ pub enum IntelHexErrorKind {
     RelocateAddressOverflow(usize),
     /// Parsed address range exceeds the maximum supported (32-bit)
     AddressRangeOverflow,
+    /// Hex file has no end-of-file record
+    MissingEndOfFile,
 }
 
 impl fmt::Display for IntelHexErrorKind {
@@ -178,6 +180,9 @@ impl fmt::Display for IntelHexErrorKind {
             }
             Self::AddressRangeOverflow => {
                 write!(f, "Maximum address exceeds 32-bit range")
+            }
+            Self::MissingEndOfFile => {
+                write!(f, "Missing end-of-file record (file may be truncated)")
             }
         }
     }

@@ -244,12 +244,18 @@ impl IntelHex {
     #[allow(clippy::too_many_lines)]
     /// Parse the raw contents of the hex file and fill internal buffer.
     ///
+    /// Parsing stops at the first end-of-file record, anything after it is ignored.
+    ///
     /// # Errors
     /// - Returns an error if the record is corrupted
     /// - Returns an error if there is an issue during filling the internal buffer
+    /// - Returns an error if there is no end-of-file record
     ///
     fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
         let raw_bytes = raw_bytes.strip_prefix(UTF8_BOM).unwrap_or(raw_bytes);
+
+        // Line number of the last record seen (reported if the EOF record is missing)
+        let mut last_line_no = 0;
 
         // Iterate over lines of records
         for (idx, line) in raw_bytes.split(|&b| b == b'\n').enumerate() {
@@ -261,6 +267,7 @@ impl IntelHex {
             }
 
             let line_no = idx + 1;
+            last_line_no = line_no;
 
             let record =
                 Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, line_no))?;
@@ -294,7 +301,9 @@ impl IntelHex {
                         self.insert_chunk_with_merge(addr, record.data);
                     }
                 }
-                RecordType::EndOfFile => {}
+                // EOF record must be the last record. Anything after it is ignored,
+                // tolerating trailing junk some tools append (e.g. SUB / NUL padding).
+                RecordType::EndOfFile => return Ok(()),
                 RecordType::ExtendedSegmentAddress => {
                     self.offset = (record.data[0] as usize * 256 + record.data[1] as usize) * 16;
                 }
@@ -322,7 +331,11 @@ impl IntelHex {
             }
         }
 
-        Ok(())
+        // Reached the end without an EOF record
+        Err(IntelHexError::ParseRecordError(
+            IntelHexErrorKind::MissingEndOfFile,
+            last_line_no,
+        ))
     }
 
     /// Creates an `IntelHex` instance and fills it with data from the provided hex file.
@@ -2558,6 +2571,55 @@ mod tests {
             Err(IntelHexError::ParseRecordError(
                 IntelHexErrorKind::AddressRangeOverflow,
                 2
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_ignores_content_after_eof() {
+        // Arrange: a valid record, a bad record and trailing junk after EOF
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_DATA_A}\n{REC_EOF}\n{REC_DATA_B}\n:0100010042BD\n\x1A\0\0");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.read_byte(0x0), Some(b'A'));
+        assert_eq!(ih.read_byte(0x1), None);
+    }
+
+    #[test]
+    fn test_parse_missing_eof() {
+        // Arrange: last record on line 3, no EOF record
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_DATA_A}\n\n{REC_DATA_B}\n\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::MissingEndOfFile,
+                3
+            ))
+        );
+
+        // Arrange: no records at all
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.parse(b" \r\n");
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::MissingEndOfFile,
+                0
             ))
         );
     }
