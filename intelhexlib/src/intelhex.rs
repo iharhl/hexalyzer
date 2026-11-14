@@ -1093,9 +1093,9 @@ impl IntelHex {
     /// ```
     pub fn write_range(&mut self, start_addr: usize, end_addr: usize) -> Result<(), IntelHexError> {
         if start_addr > end_addr {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(start_addr),
-            ));
+            return Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                start_addr, end_addr,
+            )));
         }
 
         if end_addr > u32::MAX as usize {
@@ -1148,9 +1148,9 @@ impl IntelHex {
         end_addr: usize,
     ) -> Result<(), IntelHexError> {
         if start_addr > end_addr {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(start_addr),
-            ));
+            return Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                start_addr, end_addr,
+            )));
         }
 
         // Collect keys of chunks that overlap with the removal range
@@ -1221,16 +1221,11 @@ impl IntelHex {
         Ok(())
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss
-    )]
     /// Relocate the entire data buffer to a new starting address.
     ///
     /// # Errors
-    /// Returns an error if the new starting address is out of bounds or
-    /// if the `IntelHex` instance has no data.
+    /// Returns an error if the relocated data would extend beyond the 32-bit address range.
+    /// Returns an error if the `IntelHex` instance has no data.
     ///
     /// # Example
     /// ```
@@ -1250,25 +1245,18 @@ impl IntelHex {
                     IntelHexErrorKind::IntelHexInstanceEmpty,
                 ))?;
 
-        // Cap start address to u32::MAX (to not break API for now)
-        if new_start_address > u32::MAX as usize {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(new_start_address),
-            ));
-        }
+        // The relocated data must end within the 32-bit address range
+        let max_allowed_start_address = (u32::MAX as usize).saturating_sub(max_addr - min_addr);
 
-        let offset = new_start_address as i64 - min_addr as i64;
-
-        if max_addr as i64 + offset > i64::from(u32::MAX) {
-            let max_allowed_start_address = u32::MAX - max_addr as u32 + min_addr as u32;
+        if new_start_address > max_allowed_start_address {
             return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RelocateAddressOverflow(max_allowed_start_address as usize),
+                IntelHexErrorKind::RelocateAddressOverflow(max_allowed_start_address),
             ));
         }
 
         self.buffer = std::mem::take(&mut self.buffer)
             .into_iter()
-            .map(|(addr, data)| ((addr as i64 + offset) as usize, data))
+            .map(|(addr, data)| (addr - min_addr + new_start_address, data))
             .collect();
 
         Ok(())
@@ -1955,16 +1943,31 @@ mod tests {
         ih.buffer.insert(0x0000, vec![0xFF]); // min addr
         ih.buffer.insert(0xFFFF, vec![0xFF]); // max addr
 
-        // Act
-        let res = ih.relocate(u32::MAX as usize);
+        let original = ih.buffer.clone();
 
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
-            ))
-        );
+        // Act & Assert - start addresses past the highest allowed one, incl. beyond 32-bit
+        for new_start in [
+            0xFFFF_0001,
+            u32::MAX as usize,
+            u32::MAX as usize + 1,
+            usize::MAX,
+        ] {
+            let res = ih.relocate(new_start);
+
+            assert_eq!(
+                res,
+                Err(IntelHexError::UpdateError(
+                    IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
+                )),
+                "new start 0x{new_start:X}"
+            );
+            assert_eq!(ih.buffer, original, "new start 0x{new_start:X}");
+        }
+
+        // Act & Assert - the highest allowed start address puts the last byte at u32::MAX
+        assert!(ih.relocate(0xFFFF_0000).is_ok());
+        assert_eq!(ih.get_min_addr(), Some(0xFFFF_0000));
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
     }
 
     #[test]
@@ -2277,8 +2280,13 @@ mod tests {
         // Assert
         assert_eq!(
             res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(0x100F)
+            Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                0x100F, 0x1000
+            )))
+        );
+        assert!(
+            res.is_err_and(|e| e.to_string().ends_with(
+                "Invalid range: start address 0x100F is greater than end address 0x1000"
             ))
         );
 
@@ -2468,9 +2476,9 @@ mod tests {
         // Assert
         assert_eq!(
             res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(0x100F)
-            ))
+            Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                0x100F, 0x1000
+            )))
         );
     }
 

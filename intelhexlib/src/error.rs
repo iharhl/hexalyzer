@@ -10,7 +10,9 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
+/// New variants may be added in future versions
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IntelHexError {
     ParseRecordError(IntelHexErrorKind, usize),
     CreateRecordError(IntelHexErrorKind),
@@ -80,7 +82,9 @@ impl From<io::Error> for IntelHexError {
     }
 }
 
+/// New variants may be added in future versions
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IntelHexErrorKind {
     /// Record does not begin with a ':'
     MissingStartCode,
@@ -108,6 +112,8 @@ pub enum IntelHexErrorKind {
     InvalidRecordType,
     /// Provided address is invalid (e.g. does not hold any data)
     InvalidAddress(usize),
+    /// Range start address is greater than its end address
+    InvalidRange(usize, usize),
     /// Encountered second start address record
     DuplicateStartAddress,
     /// `IntelHex` instance has no data
@@ -172,6 +178,12 @@ impl fmt::Display for IntelHexErrorKind {
             }
             Self::InvalidAddress(address) => {
                 write!(f, "No data found at address: 0x{address:X}")
+            }
+            Self::InvalidRange(start, end) => {
+                write!(
+                    f,
+                    "Invalid range: start address 0x{start:X} is greater than end address 0x{end:X}"
+                )
             }
             Self::DuplicateStartAddress => {
                 write!(f, "Encountered second start address record")
