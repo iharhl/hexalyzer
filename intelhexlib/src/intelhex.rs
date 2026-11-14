@@ -10,11 +10,87 @@ use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
 use crate::search;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// UTF-8 byte order mark. Some editors (e.g. Notepad) put it at the start of text files.
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// Counter that makes temporary file names unique within the process
+static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Write a file atomically (fully written or not changed at all).
+///
+/// The content is written to a temporary file next to the target, flushed and synced
+/// to disk, and only then renamed over the target. If anything fails (e.g. disk full),
+/// the temporary file is removed and an existing target is left untouched.
+///
+/// - Creates missing parent directories.
+/// - If the target is a symlink, the file it points to is replaced (the link is kept).
+/// - If the target exists, it must be writable, and its permissions are kept.
+fn write_file_atomically(
+    filepath: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), IntelHexError>,
+) -> Result<(), IntelHexError> {
+    // Ensure the parent directory exists
+    if let Some(parent) = filepath.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Resolve symlinks, so the link itself is not replaced by a regular file
+    let target = std::fs::canonicalize(filepath).unwrap_or_else(|_| filepath.to_path_buf());
+
+    // An existing target must be writable
+    let permissions = if target.exists() {
+        let file = OpenOptions::new().write(true).open(&target)?;
+        Some(file.metadata()?.permissions())
+    } else {
+        None
+    };
+
+    // Create temporary file in the same directory
+    let file_name = target.file_name().unwrap_or_default().to_string_lossy();
+    let temp_path = target.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let result = (|| {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        let mut writer = BufWriter::new(file);
+
+        write(&mut writer)?;
+
+        // Flush explicitly (dropping `BufWriter` silently discards write errors)
+        let file = writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
+
+        // Make sure the data is on disk before it replaces the target
+        file.sync_all()?;
+        drop(file);
+
+        std::fs::rename(&temp_path, &target)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    result
+}
 
 #[derive(Debug, Clone)]
 pub struct IntelHex {
@@ -493,7 +569,8 @@ impl IntelHex {
     /// > Extended Linear Address (ELA) records are used instead.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be written.
+    /// Returns an error if the file cannot be written. The file is replaced only after
+    /// all data is written, so an existing file is left unchanged.
     /// Returns an error if the data extends beyond the 32-bit address range
     ///
     /// # Example
@@ -515,84 +592,75 @@ impl IntelHex {
             ));
         }
 
-        // Ensure the parent directory exists
-        if let Some(parent) = filepath.as_ref().parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // Write to a temporary file first, so a failed write keeps the original file intact
+        write_file_atomically(filepath.as_ref(), |writer| {
+            // Write start address record (raw bytes + newline)
+            if let Some(s) = self.start_addr {
+                writer.write_all(b":")?;
+                writer.write_all(&s)?;
+                writeln!(writer)?;
+            }
 
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
+            let mut cur_high_addr = 0u16;
 
-        // Wrap in BufWriter for efficient line-by-line writing
-        let mut writer = std::io::BufWriter::new(file);
+            for (&chunk_start, data) in &self.buffer {
+                let mut chunk_offset = 0;
 
-        // Write start address record (raw bytes + newline)
-        if let Some(s) = self.start_addr {
-            writer.write_all(b":")?;
-            writer.write_all(&s)?;
-            writeln!(writer)?;
-        }
+                // Iterate over data chunk
+                while chunk_offset < data.len() {
+                    let addr = chunk_start + chunk_offset;
 
-        let mut cur_high_addr = 0u16;
+                    // Split address into low and high
+                    let high_addr = (addr >> 16) as u16;
+                    let low_addr = (addr & 0xFFFF) as u16;
 
-        for (&chunk_start, data) in &self.buffer {
-            let mut chunk_offset = 0;
+                    // If ELA segment changed -> emit ELA record
+                    if cur_high_addr != high_addr {
+                        let msb = (high_addr >> 8) as u8;
+                        let lsb = (high_addr & 0xFF) as u8;
 
-            // Iterate over data chunk
-            while chunk_offset < data.len() {
-                let addr = chunk_start + chunk_offset;
+                        let record =
+                            Record::create(0, RecordType::ExtendedLinearAddress, &[msb, lsb])?;
 
-                // Split address into low and high
-                let high_addr = (addr >> 16) as u16;
-                let low_addr = (addr & 0xFFFF) as u16;
+                        writeln!(writer, "{record}")?;
 
-                // If ELA segment changed -> emit ELA record
-                if cur_high_addr != high_addr {
-                    let msb = (high_addr >> 8) as u8;
-                    let lsb = (high_addr & 0xFF) as u8;
+                        cur_high_addr = high_addr;
+                    }
 
-                    let record = Record::create(0, RecordType::ExtendedLinearAddress, &[msb, lsb])?;
+                    // Determine how many bytes can fit in this record
+                    // - Can't exceed max_payload_size
+                    // - Can't cross a 64KB boundary (must stay within current high_addr)
+                    let remaining_in_segment = 0x10000 - low_addr as usize;
+                    let chunk_size = std::cmp::min(
+                        self.max_payload_size,
+                        std::cmp::min(data.len() - chunk_offset, remaining_in_segment),
+                    );
 
+                    let record = Record::create(
+                        low_addr,
+                        RecordType::Data,
+                        &data[chunk_offset..chunk_offset + chunk_size],
+                    )?;
                     writeln!(writer, "{record}")?;
 
-                    cur_high_addr = high_addr;
+                    chunk_offset += chunk_size;
                 }
-
-                // Determine how many bytes can fit in this record
-                // - Can't exceed max_payload_size
-                // - Can't cross a 64KB boundary (must stay within current high_addr)
-                let remaining_in_segment = 0x10000 - low_addr as usize;
-                let chunk_size = std::cmp::min(
-                    self.max_payload_size,
-                    std::cmp::min(data.len() - chunk_offset, remaining_in_segment),
-                );
-
-                let record = Record::create(
-                    low_addr,
-                    RecordType::Data,
-                    &data[chunk_offset..chunk_offset + chunk_size],
-                )?;
-                writeln!(writer, "{record}")?;
-
-                chunk_offset += chunk_size;
             }
-        }
 
-        // Write EOF record
-        let record = Record::create(0, RecordType::EndOfFile, &[])?;
-        write!(writer, "{record}")?; // write last line (no newline)
+            // Write EOF record
+            let record = Record::create(0, RecordType::EndOfFile, &[])?;
+            write!(writer, "{record}")?; // write last line (no newline)
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Generates a binary file at the specified path.
     /// Address gaps are filled with the provided `gap_fill` byte (usually 0x00 or 0xFF).
     ///
     /// # Errors
-    /// Returns an error if the file cannot be written.
+    /// Returns an error if the file cannot be written. The file is replaced only after
+    /// all data is written, so an existing file is left unchanged.
     ///
     /// # Example
     /// ```
@@ -610,50 +678,38 @@ impl IntelHex {
         filepath: P,
         gap_fill: u8,
     ) -> Result<(), IntelHexError> {
-        // Ensure the parent directory exists
-        if let Some(parent) = filepath.as_ref().parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // Write to a temporary file first, so a failed write keeps the original file intact
+        write_file_atomically(filepath.as_ref(), |writer| {
+            // Get the starting point
+            let mut cur_addr = self.get_min_addr().unwrap_or(0);
 
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
+            // Iterate over contiguous chunks of data
+            for (&chunk_start, chunk_data) in &self.buffer {
+                // Fill the gap between the last written byte and the start of this chunk
+                if chunk_start > cur_addr {
+                    let gap_size = chunk_start - cur_addr;
 
-        // Wrap in BufWriter for efficient line-by-line writing
-        let mut writer = std::io::BufWriter::new(file);
+                    // Use a small buffer to write gaps. Limit the buffer to 4096 KB as it is the
+                    // default / typical page size of most OS - more efficient + avoids large heap allocations.
+                    let gap_buf = vec![gap_fill; std::cmp::min(gap_size, 4096)];
 
-        // Get the starting point
-        let mut cur_addr = self.get_min_addr().unwrap_or(0);
-
-        // Iterate over contiguous chunks of data
-        for (&chunk_start, chunk_data) in &self.buffer {
-            // Fill the gap between the last written byte and the start of this chunk
-            if chunk_start > cur_addr {
-                let gap_size = chunk_start - cur_addr;
-
-                // Use a small buffer to write gaps. Limit the buffer to 4096 KB as it is the
-                // default / typical page size of most OS - more efficient + avoids large heap allocations.
-                let gap_buf = vec![gap_fill; std::cmp::min(gap_size, 4096)];
-
-                let mut remaining = gap_size;
-                while remaining > 0 {
-                    let to_write = std::cmp::min(remaining, gap_buf.len());
-                    writer.write_all(&gap_buf[..to_write])?;
-                    remaining -= to_write;
+                    let mut remaining = gap_size;
+                    while remaining > 0 {
+                        let to_write = std::cmp::min(remaining, gap_buf.len());
+                        writer.write_all(&gap_buf[..to_write])?;
+                        remaining -= to_write;
+                    }
                 }
+
+                // Write the entire contiguous chunk at once
+                writer.write_all(chunk_data)?;
+
+                // Advance the tracking address
+                cur_addr = chunk_start + chunk_data.len();
             }
 
-            // Write the entire contiguous chunk at once
-            writer.write_all(chunk_data)?;
-
-            // Advance the tracking address
-            cur_addr = chunk_start + chunk_data.len();
-        }
-
-        writer.flush()?;
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Get an iterator over (address, contiguous data chunk) pairs in the
@@ -2703,6 +2759,122 @@ mod tests {
             std::fs::read_to_string(path).unwrap_or_default(),
             "original"
         );
+    }
+
+    /// Create an empty test directory under `build/` and return its path
+    fn fresh_test_dir(name: &str) -> PathBuf {
+        let dir = PathBuf::from("build").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_default();
+        dir
+    }
+
+    /// Number of entries in a directory (to check that no temporary files are left)
+    fn dir_entry_count(dir: &Path) -> usize {
+        std::fs::read_dir(dir).map_or(0, Iterator::count)
+    }
+
+    #[test]
+    fn test_write_file_atomically_failure_keeps_original() {
+        // Arrange
+        let dir = fresh_test_dir("ut_atomic_failure");
+        let path = dir.join("out.bin");
+        std::fs::write(&path, "original").unwrap_or_default();
+
+        // Act: some data is written, then the write fails
+        let res = write_file_atomically(&path, |writer| {
+            writer.write_all(b"partial data")?;
+            Err(IntelHexError::Io(std::io::Error::other(
+                "simulated failure",
+            )))
+        });
+
+        // Assert: error, original untouched, no temporary file left behind
+        assert!(matches!(res, Err(IntelHexError::Io(_))));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[test]
+    fn test_write_file_atomically_new_and_replace() {
+        // Arrange - new file in a directory that does not exist yet
+        let dir = fresh_test_dir("ut_atomic_replace");
+        let path = dir.join("sub").join("out.bin");
+
+        // Act & Assert - creates the file
+        assert!(write_file_atomically(&path, |w| Ok(w.write_all(b"first")?)).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "first");
+
+        // Act & Assert - replaces the file
+        assert!(write_file_atomically(&path, |w| Ok(w.write_all(b"2nd")?)).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "2nd");
+        assert_eq!(dir_entry_count(&dir.join("sub")), 1);
+    }
+
+    #[test]
+    fn test_write_hex_read_only_target() {
+        // Arrange
+        let dir = fresh_test_dir("ut_atomic_read_only");
+        let path = dir.join("ih.hex");
+        std::fs::write(&path, "original").unwrap_or_default();
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut permissions = meta.permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions).unwrap_or_default();
+        }
+
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x1, 0x2]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.write_hex(&path);
+
+        // Assert: refused, original untouched
+        assert!(
+            matches!(&res, Err(IntelHexError::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_bin_keeps_permissions_and_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange: a file with custom permissions and a symlink pointing to it
+        let dir = fresh_test_dir("ut_atomic_unix");
+        let real = dir.join("real.bin");
+        let link = dir.join("link.bin");
+        std::fs::write(&real, "original").unwrap_or_default();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap_or_default();
+        std::os::unix::fs::symlink("real.bin", &link).unwrap_or_default();
+
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x41, 0x42]);
+        ih.size = 2;
+
+        // Act: write through the symlink
+        let res = ih.write_bin(&link, 0xFF);
+
+        // Assert: target file replaced, link kept, permissions kept
+        assert!(res.is_ok());
+        assert_eq!(std::fs::read_to_string(&real).unwrap_or_default(), "AB");
+        assert!(std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()));
+        assert_eq!(
+            std::fs::metadata(&real)
+                .map(|m| m.permissions().mode() & 0o777)
+                .ok(),
+            Some(0o640)
+        );
+        assert_eq!(dir_entry_count(&dir), 2);
     }
 
     #[test]
