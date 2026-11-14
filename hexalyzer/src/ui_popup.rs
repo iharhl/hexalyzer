@@ -189,8 +189,6 @@ impl PopupState {
                     return;
                 }
 
-                curr_session.dirty = true;
-
                 if let Some(old_start_addr) = old_start_addr {
                     curr_session.editor.remap_modified(addr, old_start_addr);
                 }
@@ -224,8 +222,6 @@ impl PopupState {
                     return;
                 }
 
-                curr_session.dirty = true;
-
                 curr_session.on_layout_changed();
             }
             Self::RemoveRange { start, end } => {
@@ -241,15 +237,9 @@ impl PopupState {
                     return;
                 };
 
-                let size_before = curr_session.ih.size;
-
                 if let Err(err) = curr_session.ih.remove_range(start, end) {
                     app.error.replace(err.to_string());
                     return;
-                }
-
-                if curr_session.ih.size != size_before {
-                    curr_session.dirty = true;
                 }
 
                 curr_session.on_layout_changed();
@@ -262,11 +252,10 @@ impl PopupState {
                 let addr1 = usize::from_str_radix(&addr_current, 16).ok();
                 let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
 
-                // Only mark as modified if the merge was actually applied
+                // Only update the layout if the merge was actually applied
                 if app.merge_file_into_curr_session(&path, addr1, addr2)
                     && let Some(curr_session) = app.get_curr_session_mut()
                 {
-                    curr_session.dirty = true;
                     curr_session.on_layout_changed();
                 }
             }

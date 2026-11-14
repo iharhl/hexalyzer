@@ -15,8 +15,7 @@ impl HexViewerApp {
 
         // Estimate width of each tab: name width + padding + close button space
         for session in &self.sessions {
-            let has_changes = session.dirty || !session.editor.modified.is_empty();
-            let display_name = if has_changes {
+            let display_name = if session.has_unsaved_changes() {
                 format!("*{}", session.name)
             } else {
                 session.name.clone()
@@ -95,8 +94,7 @@ impl HexViewerApp {
                         dynamic_width[i],
                         |ui| {
                             // Truncate the name if it is too long for the calculated width
-                            let has_changes = session.dirty || !session.editor.modified.is_empty();
-                            let display_name = if has_changes {
+                            let display_name = if session.has_unsaved_changes() {
                                 format!("*{}", session.name)
                             } else {
                                 session.name.clone()

@@ -238,6 +238,7 @@ impl HexViewerApp {
         // Re-calculate address range
         new_session.addr =
             new_session.ih.get_min_addr().unwrap_or(0)..=new_session.ih.get_max_addr().unwrap_or(0);
+        new_session.mark_saved();
 
         // Add the new session and switch to it
         self.sessions.push(new_session);
@@ -259,7 +260,7 @@ impl HexViewerApp {
     pub(crate) fn has_unsaved_changes(&self, session_id: usize) -> bool {
         self.sessions
             .get(session_id)
-            .is_some_and(|s| s.dirty || !s.editor.modified.is_empty())
+            .is_some_and(HexSession::has_unsaved_changes)
     }
 
     /// Reload the file from disk, replacing in-memory data.
@@ -300,13 +301,13 @@ impl HexViewerApp {
         session.file_changed_on_disk = false;
         session.file_kind = file_kind;
         session.editor = ByteEdit::default();
-        session.dirty = false;
         session.on_layout_changed();
+        session.mark_saved();
     }
 
     /// Save the current session back to its original file path.
     /// Writes in the same format the file was loaded as.
-    /// Clears the dirty state on success.
+    /// Marks the data as saved on success.
     ///
     /// Returns `true` on success. Returns `false` if the write failed (error stored in
     /// `self.error`) or the user canceled a large-file confirmation.
@@ -342,8 +343,7 @@ impl HexViewerApp {
             return false;
         };
 
-        session.editor.modified.clear();
-        session.dirty = false;
+        session.mark_saved();
         session.last_modified =
             get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         session.file_changed_on_disk = false;
@@ -397,8 +397,7 @@ impl HexViewerApp {
             // Export over the current file itself is equivalent to a save
             Some(index) if index == curr_index => {
                 let session = &mut self.sessions[index];
-                session.editor.modified.clear();
-                session.dirty = false;
+                session.mark_saved();
                 session.file_kind = kind;
                 session.last_modified =
                     get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -453,7 +452,7 @@ impl HexViewerApp {
     ) -> bool {
         // Load and relocate the selected file first. These steps can fail and must not
         // leave the current session half-modified.
-        let (mut new_ih, _) = match load_file_into_ih(path) {
+        let (mut incoming_ih, _) = match load_file_into_ih(path) {
             Ok(result) => result,
             Err(msg) => {
                 self.error = Some(msg);
@@ -462,7 +461,7 @@ impl HexViewerApp {
         };
 
         if let Some(new_start_addr) = addr2
-            && let Err(err) = new_ih.relocate(new_start_addr)
+            && let Err(err) = incoming_ih.relocate(new_start_addr)
         {
             self.error = Some(err.to_string());
             return false;
@@ -491,7 +490,14 @@ impl HexViewerApp {
         }
 
         // Merge the two IntelHex instances (cannot fail)
-        cur_session.ih.merge(&new_ih);
+        cur_session.ih.merge(&incoming_ih);
+
+        // Forget edits of bytes overwritten by the merged file, so "Restore" does not
+        // write the pre-edit values over the merged data
+        cur_session
+            .editor
+            .modified
+            .retain(|&addr, _| incoming_ih.read_byte(addr).is_none());
 
         true
     }

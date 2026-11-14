@@ -1,5 +1,6 @@
 use crate::byteedit::ByteEdit;
 use crate::events::EventState;
+use crate::fingerprint::Fingerprint;
 use crate::loader::FileKind;
 use crate::selection::Selection;
 use crate::ui_converter::HexConverter;
@@ -59,9 +60,8 @@ pub struct HexSession {
     pub last_mod_check: std::time::Instant,
     /// Whether the file on disk has diverged from the loaded data (sticky until next poll).
     pub file_changed_on_disk: bool,
-    /// Whether the session has been modified by structural operations (relocate, insert/remove
-    /// range, merge). Byte-level edits are tracked separately in `editor.modified`.
-    pub dirty: bool,
+    /// Tracks whether the data differs from the last loaded or saved version
+    pub fingerprint: Fingerprint,
     /// Detected file format at load time
     pub file_kind: FileKind,
     /// Scroll id that allows each tab to keep its own scroll position
@@ -112,7 +112,7 @@ impl Default for HexSession {
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
-            dirty: false,
+            fingerprint: Fingerprint::default(),
             file_kind: FileKind::Unknown,
             scroll_id: 0,
         }
@@ -124,9 +124,43 @@ impl HexSession {
     /// (relocate, insert/remove range, merge, reload).
     pub(crate) fn on_layout_changed(&mut self) {
         self.addr = self.ih.get_min_addr().unwrap_or(0)..=self.ih.get_max_addr().unwrap_or(0);
+        // Forget edits of bytes that no longer exist (e.g. removed range), so they are
+        // neither highlighted nor written back into a range inserted later by "Restore"
+        let ih = &self.ih;
+        self.editor
+            .modified
+            .retain(|&addr, _| ih.read_byte(addr).is_some());
+        self.fingerprint.recompute(&self.ih);
+        self.clear_marks_if_saved();
         self.selection.clear();
         self.editor.clear();
         self.search.redo();
+    }
+
+    /// Mark the current data as saved (after load, reload or save)
+    pub(crate) fn mark_saved(&mut self) {
+        self.fingerprint.mark_saved(&self.ih);
+        self.editor.modified.clear();
+    }
+
+    /// Returns `true` if the data differs from the last loaded or saved version
+    pub(crate) const fn has_unsaved_changes(&self) -> bool {
+        self.fingerprint.is_changed()
+    }
+
+    /// Clear the byte edit marks once the data matches the saved version again,
+    /// since there is nothing left to highlight or restore.
+    ///
+    /// Limitation: the marks track bytes typed over since the last save or layout change
+    /// (with their values before that), not the difference from the saved file.
+    /// E.g. after removing a range and inserting it back, the data differs from the saved
+    /// file with no bytes marked. Typing the original values back then marks each byte
+    /// (Restore would revert it to the inserted value) until the last one makes the data
+    /// match the saved file and all marks are cleared here.
+    pub(crate) fn clear_marks_if_saved(&mut self) {
+        if !self.has_unsaved_changes() {
+            self.editor.modified.clear();
+        }
     }
 }
 

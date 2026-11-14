@@ -14,6 +14,7 @@ mod app;
 mod byteedit;
 mod clipboard;
 mod events;
+mod fingerprint;
 mod loader;
 mod selection;
 mod ui_button;
