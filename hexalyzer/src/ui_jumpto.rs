@@ -1,11 +1,9 @@
-use crate::app::HexSession;
+use crate::app::{EnterAction, HexSession};
 use crate::events::EventState;
 use eframe::egui;
 
 #[derive(Default)]
 pub struct JumpTo {
-    /// Is the text edit window in focus
-    pub(crate) has_focus: bool,
     /// Address to jump to
     pub(crate) addr: Option<usize>,
     /// User input string
@@ -49,15 +47,14 @@ impl HexSession {
         }
 
         if textedit.has_focus() {
-            self.search.has_focus = false;
-            self.jump_to.has_focus = true;
+            self.enter_action = Some(EnterAction::JumpTo);
 
             // Clear the selection to avoid modifying bytes
             // while typing in the jumpto area
             self.selection.clear();
         }
 
-        if events.enter_released && self.jump_to.has_focus {
+        if events.enter_released && self.enter_action == Some(EnterAction::JumpTo) {
             self.jump_to.addr = usize::from_str_radix(&self.jump_to.input, 16).ok();
 
             // Select the byte we just jumped to

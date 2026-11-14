@@ -11,7 +11,14 @@ impl HexViewerApp {
         }
 
         // Clone events before mutable borrow of self for session access
-        let events = self.events.clone();
+        let mut events = self.events.clone();
+
+        // Enter confirming a popup or typed into the converter belongs to that window.
+        // Popups are drawn after the side panel, so a popup confirmed by this very
+        // Enter release is still active here.
+        if self.popup.active || self.converter.has_focus() {
+            events.enter_released = false;
+        }
 
         egui::Panel::left("left_panel")
             .exact_size(280.0)

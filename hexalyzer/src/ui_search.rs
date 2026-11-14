@@ -1,4 +1,4 @@
-use crate::app::HexSession;
+use crate::app::{EnterAction, HexSession};
 use crate::events::EventState;
 use eframe::egui;
 
@@ -26,8 +26,6 @@ pub struct Search {
     pub(crate) results: Vec<usize>,
     /// Length of the search pattern in bytes
     pub(crate) length: usize,
-    /// Does the search text field have focus
-    pub(crate) has_focus: bool,
     /// Index of the current search result
     idx: usize,
     /// Address of the current search result before a redo
@@ -49,7 +47,6 @@ pub struct Search {
 impl Search {
     /// Clear the search state
     pub(crate) fn clear(&mut self) {
-        self.has_focus = false;
         self.addr = None;
         self.results.clear();
         self.length = 0;
@@ -122,15 +119,16 @@ impl HexSession {
         }
 
         if textedit.has_focus() {
-            self.jump_to.has_focus = false;
-            self.search.has_focus = true;
+            self.enter_action = Some(EnterAction::Search);
 
             // Clear the selection to avoid modifying bytes
             // while typing in the search area
             self.selection.clear();
         }
 
-        if (events.enter_released && self.search.has_focus) || self.search.force {
+        if (events.enter_released && self.enter_action == Some(EnterAction::Search))
+            || self.search.force
+        {
             // Same input -> move to next result, otherwise -> search again
             if self.search.current == self.search.last {
                 if !self.search.results.is_empty() {

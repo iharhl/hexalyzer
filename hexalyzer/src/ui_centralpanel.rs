@@ -84,6 +84,7 @@ impl HexSession {
             }
             self.search.clear();
             self.editor.clear();
+            self.enter_action = None;
         }
 
         // Start and end addresses of the whole visible area
