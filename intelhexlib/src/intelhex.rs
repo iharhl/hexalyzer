@@ -273,7 +273,7 @@ impl IntelHex {
                     if !record.data.is_empty() {
                         let new_end_addr = addr + record.data.len();
 
-                        // For now, limit the address range to u32 limit
+                        // Limit the address range to u32::MAX
                         if new_end_addr - 1 > u32::MAX as usize {
                             return Err(IntelHexError::ParseRecordError(
                                 IntelHexErrorKind::AddressRangeOverflow,
@@ -449,7 +449,7 @@ impl IntelHex {
         // Read the contents of the file
         let data = std::fs::read(&filepath)?;
 
-        // For now, limit the address range to u32 limit.
+        // Limit the address range to u32::MAX
         if base_address > u32::MAX as usize || data.len() > u32::MAX as usize - base_address + 1 {
             return Err(IntelHexError::UpdateError(
                 IntelHexErrorKind::AddressRangeOverflow,
@@ -493,6 +493,7 @@ impl IntelHex {
     /// assert_eq!(ih.size, 68);
     /// ```
     pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
+        // Limit the address range to u32::MAX
         if let Some(max_addr) = self.get_max_addr()
             && max_addr > u32::MAX as usize
         {
@@ -784,7 +785,7 @@ impl IntelHex {
     pub fn read_range(&self, start_addr: usize, len: usize) -> Option<Vec<u8>> {
         // Find the chunk that might contain the start_addr
         if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=start_addr).next_back() {
-            let end_addr = start_addr + len;
+            let end_addr = start_addr.checked_add(len)?;
             let chunk_end = chunk_start + chunk_data.len();
 
             // Check if the entire requested range is within this chunk
@@ -803,6 +804,9 @@ impl IntelHex {
     ///
     /// For a non-allocating alternative, see [`iter_range`](Self::iter_range).
     ///
+    /// The range is clamped to the end of the address space (`usize::MAX`), so in case of
+    /// an overflow fewer than `len` elements will be returned.
+    ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
@@ -814,8 +818,8 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn read_range_safe(&self, start_addr: usize, len: usize) -> Vec<Option<u8>> {
-        let mut result = Vec::with_capacity(len);
-        let end_addr = start_addr + len;
+        let end_addr = start_addr.saturating_add(len);
+        let mut result = Vec::with_capacity(end_addr - start_addr);
         let mut cur_addr = start_addr;
 
         while cur_addr < end_addr {
@@ -868,6 +872,9 @@ impl IntelHex {
     /// This is the iterator equivalent of [`read_range_safe`] which avoids heap
     /// allocation.
     ///
+    /// The range is clamped to the end of the address space (`usize::MAX`), so in case of
+    /// an overflow fewer than `len` elements will be yielded.
+    ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
@@ -882,7 +889,7 @@ impl IntelHex {
         IterRange {
             buffer: &self.buffer,
             cur_addr: start_addr,
-            end_addr: start_addr + len,
+            end_addr: start_addr.saturating_add(len),
             current_chunk: None,
         }
     }
@@ -1077,17 +1084,11 @@ impl IntelHex {
             ));
         }
 
-        let remove_start = start_addr;
-        let remove_end = end_addr + 1; // exclusive
-
         // Collect keys of chunks that overlap with the removal range
         let affected_keys: Vec<usize> = self
             .buffer
             .range(..=end_addr)
-            .filter(|&(&chunk_start, chunk_data)| {
-                let chunk_end = chunk_start + chunk_data.len();
-                chunk_end > remove_start && chunk_start < remove_end
-            })
+            .filter(|&(&chunk_start, chunk_data)| chunk_start + chunk_data.len() > start_addr)
             .map(|(&k, _)| k)
             .collect();
 
@@ -1097,18 +1098,18 @@ impl IntelHex {
             let Some(chunk_data) = self.buffer.remove(&key) else {
                 continue;
             };
-            let chunk_end = key + chunk_data.len();
+            let chunk_last = key + chunk_data.len() - 1;
 
             // Left fragment: portion before the removal range
-            if key < remove_start {
-                let left_end = std::cmp::min(remove_start, chunk_end);
-                new_chunks.push((key, chunk_data[..left_end - key].to_vec()));
+            if key < start_addr {
+                new_chunks.push((key, chunk_data[..start_addr - key].to_vec()));
             }
 
-            // Right fragment: portion after the removal range
-            if chunk_end > remove_end {
-                let right_start = std::cmp::max(remove_end, key);
-                new_chunks.push((remove_end, chunk_data[right_start - key..].to_vec()));
+            // Right fragment: portion after the removal range.
+            // `end_addr < chunk_last` guarantees `end_addr + 1` does not overflow.
+            if chunk_last > end_addr {
+                let right_start = end_addr + 1;
+                new_chunks.push((right_start, chunk_data[right_start - key..].to_vec()));
             }
         }
 
@@ -2398,6 +2399,59 @@ mod tests {
             Err(IntelHexError::UpdateError(
                 IntelHexErrorKind::InvalidAddress(0x100F)
             ))
+        );
+    }
+
+    #[test]
+    fn test_remove_range_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.buffer.insert(0x1000, vec![0x5, 0x6, 0x7, 0x8]);
+        ih.size = 8;
+
+        // Act & Assert - range starting past all data is a no-op
+        assert!(ih.remove_range(usize::MAX, usize::MAX).is_ok());
+        assert_eq!(ih.size, 8);
+
+        // Act & Assert - open-ended range trims the last chunk
+        assert!(ih.remove_range(0x1002, usize::MAX).is_ok());
+        assert_eq!(
+            ih.buffer,
+            BTreeMap::from([(0x0, vec![0x1, 0x2, 0x3, 0x4]), (0x1000, vec![0x5, 0x6])])
+        );
+        assert_eq!(ih.size, 6);
+
+        // Act & Assert - full address space removes everything
+        assert!(ih.remove_range(0, usize::MAX).is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+    }
+
+    #[test]
+    fn test_read_ops_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.size = 4;
+
+        // `read_range` - a range past the end of the address space is never fully backed
+        assert_eq!(ih.read_range(0x1000, usize::MAX), None);
+        assert_eq!(ih.read_range(0x1002, usize::MAX - 0x1000), None);
+
+        // `read_range_safe` - clamped to the end of the address space
+        assert_eq!(ih.read_range_safe(usize::MAX - 2, 10), vec![None, None]);
+        assert_eq!(ih.read_range_safe(usize::MAX, 1), vec![]);
+
+        // `iter_range` - clamped to the end of the address space
+        let iter = ih.iter_range(usize::MAX - 2, 10);
+        assert_eq!(iter.len(), 2);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!(
+            ih.iter_range(0x1002, usize::MAX)
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![Some(0x3), Some(0x4), None]
         );
     }
 
