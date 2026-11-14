@@ -19,26 +19,31 @@ pub fn get_last_modified(path: &PathBuf) -> std::io::Result<std::time::SystemTim
     std::fs::metadata(path).map(|meta| meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
 }
 
+/// Number of bytes read from the start of a file to detect its kind
+const DETECT_LEN: u64 = 4096;
+
+/// Detect the file kind. A known extension decide the type, otherwise the content is checked.
 fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
-    let mut f = File::open(path)?;
+    let mut buf = Vec::new();
+    File::open(path)?.take(DETECT_LEN).read_to_end(&mut buf)?;
 
-    // Read the first 32 bytes (OK if file has less)
-    let mut buf = [0u8; 32];
-    let n = f.read(&mut buf)?;
-    let buf = &buf[..n];
-
-    // If read 0 bytes -> Unknown
-    if n == 0 {
+    // Empty file -> Unknown
+    if buf.is_empty() {
         return Ok(FileKind::Unknown);
     }
 
+    // A known extension is detected
+    if let Some(kind) = kind_from_extension(path) {
+        return Ok(kind);
+    }
+
     // ELF magic check
-    if buf.len() >= 4 && &buf[..4] == b"\x7FELF" {
+    if buf.starts_with(b"\x7FELF") {
         return Ok(FileKind::Elf);
     }
 
-    // Intel HEX record start check
-    if buf[0] == b':' {
+    // Intel HEX: the first non-blank line must be a valid record
+    if IntelHex::is_intel_hex(&buf) {
         return Ok(FileKind::Hex);
     }
 
@@ -46,16 +51,17 @@ fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
     Ok(FileKind::Bin)
 }
 
-/// Determine file kind from a file path extension
-pub fn kind_from_extension(path: &std::path::Path) -> FileKind {
+/// File kind named by the path extension, or `None` for other/no extension
+fn kind_from_extension(path: &std::path::Path) -> Option<FileKind> {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("hex") => FileKind::Hex,
-        _ => FileKind::Bin,
+        Some("hex" | "ihx" | "ihex") => Some(FileKind::Hex),
+        Some("bin") => Some(FileKind::Bin),
+        _ => None,
     }
 }
 
@@ -372,7 +378,7 @@ impl HexViewerApp {
         }
 
         let gap_fill = self.gap_fill;
-        let kind = kind_from_extension(&path);
+        let kind = kind_from_extension(&path).unwrap_or(FileKind::Bin);
 
         let Some(session) = self.get_curr_session_mut() else {
             return false;
