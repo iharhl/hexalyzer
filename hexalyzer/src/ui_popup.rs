@@ -195,9 +195,7 @@ impl PopupState {
                     curr_session.editor.remap_modified(addr, old_start_addr);
                 }
 
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::InsertRange { start, end } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
@@ -228,9 +226,7 @@ impl PopupState {
 
                 curr_session.dirty = true;
 
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::RemoveRange { start, end } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
@@ -256,9 +252,7 @@ impl PopupState {
                     curr_session.dirty = true;
                 }
 
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::Merge {
                 path,
@@ -273,9 +267,7 @@ impl PopupState {
                     && let Some(curr_session) = app.get_curr_session_mut()
                 {
                     curr_session.dirty = true;
-                    curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                        ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                    curr_session.search.redo();
+                    curr_session.on_layout_changed();
                 }
             }
             Self::Error(_) | Self::About => {}

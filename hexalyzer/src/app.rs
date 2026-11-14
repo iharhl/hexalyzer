@@ -109,6 +109,17 @@ impl Default for HexSession {
     }
 }
 
+impl HexSession {
+    /// Update the session state after an operation that changes the data layout
+    /// (relocate, insert/remove range, merge, reload).
+    pub(crate) fn on_layout_changed(&mut self) {
+        self.addr = self.ih.get_min_addr().unwrap_or(0)..=self.ih.get_max_addr().unwrap_or(0);
+        self.selection.clear();
+        self.editor.clear();
+        self.search.redo();
+    }
+}
+
 impl Default for HexViewerApp {
     fn default() -> Self {
         Self {

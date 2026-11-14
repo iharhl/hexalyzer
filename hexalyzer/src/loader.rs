@@ -290,14 +290,12 @@ impl HexViewerApp {
         };
 
         session.ih = ih;
-        session.addr =
-            session.ih.get_min_addr().unwrap_or(0)..=session.ih.get_max_addr().unwrap_or(0);
         session.last_modified = last_modified;
         session.file_changed_on_disk = false;
         session.file_kind = file_kind;
         session.editor = ByteEdit::default();
         session.dirty = false;
-        session.search.redo();
+        session.on_layout_changed();
     }
 
     /// Save the current session back to its original file path.

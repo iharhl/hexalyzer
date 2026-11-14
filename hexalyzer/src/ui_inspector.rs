@@ -1,6 +1,7 @@
 use crate::app::{Endianness, HexSession};
 use eframe::egui;
 use eframe::egui::Ui;
+use intelhexlib::IntelHex;
 use std::time::{Duration, Instant};
 
 #[allow(clippy::needless_pass_by_value)]
@@ -128,6 +129,29 @@ fn format_unix_timestamp(seconds: i64) -> Option<String> {
     ))
 }
 
+/// Collect the bytes in `min..=max` for the inspector, skipping gaps.
+///
+/// The inspector shows values only for 1, 2, 4 or 8 bytes, so at most 9 bytes are
+/// collected (enough to tell 8 from "more than 8").
+fn collect_bytes(ih: &IntelHex, min: usize, max: usize) -> Vec<u8> {
+    const MAX_BYTES: usize = 9;
+    let mut bytes = Vec::with_capacity(MAX_BYTES);
+    for (&start, data) in ih {
+        let end = start + data.len();
+        if end <= min || data.is_empty() {
+            continue;
+        }
+        if start > max || bytes.len() >= MAX_BYTES {
+            break;
+        }
+        let lo = min.max(start) - start;
+        let hi = max.min(end - 1) - start;
+        let take = MAX_BYTES - bytes.len();
+        bytes.extend(data[lo..=hi].iter().take(take));
+    }
+    bytes
+}
+
 impl HexSession {
     #[allow(clippy::similar_names, clippy::too_many_lines)]
     /// Displays the inspector panel for the selected data.
@@ -160,12 +184,7 @@ impl HexSession {
                     return;
                 };
 
-                let mut bytes: Vec<u8> = Vec::new();
-                for addr in min..=max {
-                    if let Some(b) = self.ih.read_byte(addr) {
-                        bytes.push(b);
-                    }
-                }
+                let mut bytes = collect_bytes(&self.ih, min, max);
 
                 if self.endianness == Endianness::Big && bytes.len() > 1 {
                     bytes.reverse();
