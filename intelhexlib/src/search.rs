@@ -1,28 +1,9 @@
+use crate::IntelHexErrorKind;
 use regex::bytes::Regex;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SearchType {
-    Hex(Vec<u8>),
-    Ascii(String),
-    Regex(String),
-}
-
-/// Searches for a pattern in the hex data.
-/// Returns start addresses of matches, sorted in ascending order.
-pub fn search<'a>(
-    iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
-    search_type: &SearchType,
-) -> Vec<usize> {
-    match search_type {
-        SearchType::Hex(p) => search_bytes(iter, p),
-        SearchType::Ascii(s) => search_bytes(iter, s.as_bytes()),
-        SearchType::Regex(p) => search_regex(iter, p),
-    }
-}
-
 /// Slide window search for `BTreeMap<usize, Vec<u8>>`.
-/// Returns the starting addresses of all matches.
-fn search_bytes<'a>(
+/// Returns the starting addresses of all matches, sorted in ascending order.
+pub fn search_bytes<'a>(
     iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
     pattern: &[u8],
 ) -> Vec<usize> {
@@ -47,23 +28,27 @@ fn search_bytes<'a>(
 }
 
 /// Regex search for `BTreeMap<usize, Vec<u8>>`.
-/// Returns the starting addresses of all matches.
-fn search_regex<'a>(
+/// Returns the starting addresses of all matches, sorted in ascending order.
+///
+/// Empty matches are skipped, as they do not point at any data.
+///
+/// # Errors
+/// Returns an error if the pattern is not a valid regular expression.
+pub fn search_regex<'a>(
     iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
     pattern: &str,
-) -> Vec<usize> {
-    let Ok(re) = Regex::new(pattern) else {
-        return vec![];
-    };
+) -> Result<Vec<usize>, IntelHexErrorKind> {
+    let re = Regex::new(pattern).map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
+
     let mut matches = Vec::new();
 
     for (&addr, data) in iter {
-        for mtch in re.find_iter(data) {
+        for mtch in re.find_iter(data).filter(|m| !m.is_empty()) {
             matches.push(addr + mtch.start());
         }
     }
 
-    matches
+    Ok(matches)
 }
 
 #[cfg(test)]
@@ -88,7 +73,7 @@ mod tests {
         let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(start_addr, random_bytes)]);
 
         // Act
-        let res = search(map.iter(), &SearchType::Hex(pattern));
+        let res = search_bytes(map.iter(), &pattern);
 
         // Assert
         assert_eq!(res, vec![start_addr + 203]);
@@ -110,7 +95,7 @@ mod tests {
         let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(start_addr, random_bytes)]);
 
         // Act
-        let res = search(map.iter(), &SearchType::Ascii("20.71".to_string()));
+        let res = search_bytes(map.iter(), b"20.71");
 
         // Assert
         assert_eq!(res, vec![start_addr + 203]);
@@ -131,9 +116,34 @@ mod tests {
         let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(start_addr, random_bytes)]);
 
         // Act
-        let res = search(map.iter(), &SearchType::Regex(r"\d{2}\D{2}L".to_string()));
+        let res = search_regex(map.iter(), r"\d{2}\D{2}L");
 
         // Assert
-        assert_eq!(res, vec![start_addr + 203]);
+        assert_eq!(res, Ok(vec![start_addr + 203]));
+    }
+
+    #[test]
+    fn test_search_regex_invalid() {
+        // Arrange
+        let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(0x1000, b"abc".to_vec())]);
+
+        // Act
+        let res = search_regex(map.iter(), "[");
+
+        // Assert
+        assert!(matches!(res, Err(IntelHexErrorKind::InvalidRegex(_))));
+    }
+
+    #[test]
+    fn test_search_regex_skips_empty_matches() {
+        // Arrange
+        let map: BTreeMap<usize, Vec<u8>> =
+            BTreeMap::from([(0x10, b"abxxxcx".to_vec()), (0x20, b"yy".to_vec())]);
+
+        // Act
+        let res = search_regex(map.iter(), "x*");
+
+        // Assert: only non-empty matches, no hit at every byte
+        assert_eq!(res, Ok(vec![0x12, 0x16]));
     }
 }

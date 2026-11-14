@@ -8,7 +8,7 @@
 
 use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
-use crate::search::{SearchType, search};
+use crate::search;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1383,32 +1383,35 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn search_bytes(&self, pattern: &[u8]) -> Vec<usize> {
-        search(self.iter(), &SearchType::Hex(pattern.to_vec()))
+        search::search_bytes(self.iter(), pattern)
     }
 
     /// Window slide search for an ASCII string in the `IntelHex` data.
     /// Returns start addresses of matches, sorted in ascending order.
     ///
-    /// If `regex` flag is set to true, the pattern is interpreted as a regular expression.
-    /// Otherwise, it is interpreted as a literal string.
+    /// If `regex` flag is set to true, the pattern is interpreted as a regular expression
+    /// (empty matches are skipped). Otherwise, it is interpreted as a literal string.
+    ///
+    /// # Errors
+    /// Returns an error if `regex` is set and `pattern` is not a valid regular expression.
     ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
     ///
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
-    /// let matches1: Vec<usize> = ih.search_ascii("Kf", false); // [0x4B, 0x66] in hex bytes
-    /// let matches2: Vec<usize> = ih.search_ascii(r"H\d{1}\w{1}", true); // H0Y in the hex file
+    /// let matches1 = ih.search_ascii("Kf", false).unwrap(); // [0x4B, 0x66] in hex bytes
+    /// let matches2 = ih.search_ascii(r"H\d{1}\w{1}", true).unwrap(); // H0Y in the hex file
     ///
     /// assert_eq!(matches1, vec![0x1C216]);
     /// assert_eq!(matches2, vec![0x1C237]);
+    /// assert!(ih.search_ascii("[", true).is_err());
     /// ```
-    #[must_use]
-    pub fn search_ascii(&self, pattern: &str, regex: bool) -> Vec<usize> {
+    pub fn search_ascii(&self, pattern: &str, regex: bool) -> Result<Vec<usize>, IntelHexError> {
         if regex {
-            search(self.iter(), &SearchType::Regex(pattern.to_string()))
+            search::search_regex(self.iter(), pattern).map_err(IntelHexError::SearchError)
         } else {
-            search(self.iter(), &SearchType::Ascii(pattern.to_string()))
+            Ok(search::search_bytes(self.iter(), pattern.as_bytes()))
         }
     }
 }

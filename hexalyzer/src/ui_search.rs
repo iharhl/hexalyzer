@@ -1,4 +1,4 @@
-use crate::app::{EnterAction, HexSession};
+use crate::app::{EnterAction, HexSession, colors};
 use crate::events::EventState;
 use eframe::egui;
 
@@ -28,6 +28,8 @@ pub struct Search {
     pub(crate) length: usize,
     /// Index of the current search result
     idx: usize,
+    /// Error of the last search (invalid regex)
+    error: Option<String>,
     /// Address of the current search result before a redo
     resume_from: Option<usize>,
 
@@ -53,6 +55,7 @@ impl Search {
         // Do not clear current to preserve text box content
         self.last = SearchState::default();
         self.idx = 0;
+        self.error = None;
         self.resume_from = None;
         self.force = false;
     }
@@ -136,6 +139,7 @@ impl HexSession {
                 }
             } else {
                 let input = self.search.current.input.as_str();
+                self.search.error = None;
 
                 // Search if pattern is valid
                 let valid = match self.search.current.mode {
@@ -148,22 +152,24 @@ impl HexSession {
                             false
                         }
                     }
-                    SearchMode::Ascii => {
+                    SearchMode::Ascii | SearchMode::Regex => {
+                        let regex = self.search.current.mode == SearchMode::Regex;
+
                         if input.is_empty() {
                             false
                         } else {
-                            self.search.results = self.ih.search_ascii(input, false);
-                            self.search.length = input.len();
-                            true
-                        }
-                    }
-                    SearchMode::Regex => {
-                        if input.is_empty() {
-                            false
-                        } else {
-                            self.search.results = self.ih.search_ascii(input, true);
-                            self.search.length = 1; // highlight the first byte of the match
-                            true
+                            match self.ih.search_ascii(input, regex) {
+                                Ok(results) => {
+                                    self.search.results = results;
+                                    // Regex: highlight the first byte of the match
+                                    self.search.length = if regex { 1 } else { input.len() };
+                                    true
+                                }
+                                Err(err) => {
+                                    self.search.error = Some(err.to_string());
+                                    false
+                                }
+                            }
                         }
                     }
                 };
@@ -199,6 +205,13 @@ impl HexSession {
         }
 
         ui.add_space(5.0);
+
+        // Show the search error (details on hover)
+        if let Some(err) = &self.search.error {
+            ui.label(egui::RichText::new("Invalid regex").color(colors::WARNING))
+                .on_hover_text(err);
+            return;
+        }
 
         // Show matches count if any
         let label_text = if self.search.results.is_empty() {

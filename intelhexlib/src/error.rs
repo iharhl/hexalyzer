@@ -15,6 +15,7 @@ pub enum IntelHexError {
     ParseRecordError(IntelHexErrorKind, usize),
     CreateRecordError(IntelHexErrorKind),
     UpdateError(IntelHexErrorKind),
+    SearchError(IntelHexErrorKind),
     Io(io::Error),
 }
 
@@ -23,7 +24,8 @@ impl PartialEq for IntelHexError {
         match (self, other) {
             (Self::ParseRecordError(a, la), Self::ParseRecordError(b, lb)) => a == b && la == lb,
             (Self::CreateRecordError(a), Self::CreateRecordError(b))
-            | (Self::UpdateError(a), Self::UpdateError(b)) => a == b,
+            | (Self::UpdateError(a), Self::UpdateError(b))
+            | (Self::SearchError(a), Self::SearchError(b)) => a == b,
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
             _ => false,
         }
@@ -52,6 +54,9 @@ impl fmt::Display for IntelHexError {
                     f,
                     "Error encountered during update of IntelHex instance:\n{base_err}",
                 )
+            }
+            Self::SearchError(base_err) => {
+                write!(f, "Error encountered during search:\n{base_err}")
             }
             Self::Io(err) => {
                 write!(f, "I/O error: {err}")
@@ -113,6 +118,8 @@ pub enum IntelHexErrorKind {
     AddressRangeOverflow,
     /// Hex file has no end-of-file record
     MissingEndOfFile,
+    /// Search pattern is not a valid regular expression
+    InvalidRegex(String),
 }
 
 impl fmt::Display for IntelHexErrorKind {
@@ -183,6 +190,9 @@ impl fmt::Display for IntelHexErrorKind {
             }
             Self::MissingEndOfFile => {
                 write!(f, "Missing end-of-file record (file may be truncated)")
+            }
+            Self::InvalidRegex(msg) => {
+                write!(f, "Invalid regular expression: {msg}")
             }
         }
     }
