@@ -418,7 +418,11 @@ impl HexViewerApp {
     /// Intercepts save shortcut at the start of the frame and performs the save
     /// of the current session to its file if it has unsaved changes.
     pub(crate) fn handle_save_shortcut(&mut self, ctx: &egui::Context) {
-        let pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        let pressed = ctx.input_mut(|i| {
+            !i.modifiers.shift
+                && !i.modifiers.alt
+                && i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
+        });
         if !pressed || self.popup.active {
             return;
         }
