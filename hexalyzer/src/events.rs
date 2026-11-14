@@ -14,22 +14,25 @@ pub struct EventState {
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
     pub(crate) shift_down: bool,
-    pub(crate) arrow_key_released: Option<egui::Key>,
+    /// Arrow key presses this frame (key-repeats included)
+    pub(crate) arrow_keys_pressed: Vec<egui::Key>,
 }
 
 /// Collect events once per frame from an `egui::Ui` reference and return an aggregated state.
 /// **Note**: currently unused; might be useful in the future.
 #[allow(dead_code)]
 pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
-    ui.input(collect_inner)
+    let text_edit_focused = ui.ctx().text_edit_focused();
+    ui.input(|i| collect_inner(i, text_edit_focused))
 }
 
 /// Collect events once per frame from an `egui::Context` reference and return an aggregated state.
 pub fn collect_ui_events_ctx(ctx: &egui::Context) -> EventState {
-    ctx.input(collect_inner)
+    let text_edit_focused = ctx.text_edit_focused();
+    ctx.input(|i| collect_inner(i, text_edit_focused))
 }
 
-fn collect_inner(i: &egui::InputState) -> EventState {
+fn collect_inner(i: &egui::InputState, text_edit_focused: bool) -> EventState {
     let mut state = EventState {
         pointer_state: PointerState {
             pointer_hover: i.pointer.hover_pos(),
@@ -48,6 +51,23 @@ fn collect_inner(i: &egui::InputState) -> EventState {
                     .hex_chars
                     .extend(text.chars().filter(char::is_ascii_hexdigit));
             }
+            // Arrow key presses (key-repeats included, so holding a key keeps moving).
+            // Skipped while a text field has focus (arrows move its text cursor there)
+            // and when combined with Cmd / Ctrl / Alt (reserved for shortcuts).
+            egui::Event::Key {
+                key:
+                    key @ (egui::Key::ArrowLeft
+                    | egui::Key::ArrowRight
+                    | egui::Key::ArrowUp
+                    | egui::Key::ArrowDown),
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if !text_edit_focused && !modifiers.command && !modifiers.ctrl && !modifiers.alt {
+                    state.arrow_keys_pressed.push(*key);
+                }
+            }
             // Key release events
             egui::Event::Key {
                 key,
@@ -59,17 +79,6 @@ fn collect_inner(i: &egui::InputState) -> EventState {
                 // Store Enter key release directly
                 if state.last_key_released == Some(egui::Key::Enter) {
                     state.enter_released = true;
-                }
-
-                // Store arrow keys release directly
-                if matches!(
-                    *key,
-                    egui::Key::ArrowLeft
-                        | egui::Key::ArrowRight
-                        | egui::Key::ArrowUp
-                        | egui::Key::ArrowDown
-                ) {
-                    state.arrow_key_released = Some(*key);
                 }
             }
             _ => {}

@@ -2,9 +2,75 @@ use crate::app::{HexSession, colors};
 use crate::events::EventState;
 use crate::ui_button;
 use eframe::egui;
+use intelhexlib::IntelHex;
 use std::ops::Range;
 
+/// Align to 0x10 so every printed row address ends with '0'
+const ROW_ADDR_ALIGN: usize = 0x10;
+
+/// First address `>= addr` that holds data: `addr` itself if it holds data,
+/// otherwise the start of the next chunk.
+fn next_data_addr(ih: &IntelHex, addr: usize) -> Option<usize> {
+    if ih.read_byte(addr).is_some() {
+        return Some(addr);
+    }
+    ih.iter()
+        .find(|(start, data)| **start > addr && !data.is_empty())
+        .map(|(start, _)| *start)
+}
+
+/// Last address `<= addr` that holds data: `addr` itself if it holds data,
+/// otherwise the end of the previous chunk.
+fn prev_data_addr(ih: &IntelHex, addr: usize) -> Option<usize> {
+    if ih.read_byte(addr).is_some() {
+        return Some(addr);
+    }
+    ih.iter()
+        .rev()
+        .filter(|(_, data)| !data.is_empty())
+        .map(|(start, data)| start + data.len() - 1)
+        .find(|&end| end < addr)
+}
+
 impl HexSession {
+    /// Address of the first displayed row (start address aligned down to `ROW_ADDR_ALIGN`)
+    pub(crate) const fn display_start(&self) -> usize {
+        *self.addr.start() & !(ROW_ADDR_ALIGN - 1)
+    }
+
+    /// Move the cursor on arrow key presses. Gaps between data chunks are skipped.
+    /// Returns the cursor address if any arrow key was handled, so the view can follow it.
+    fn handle_arrow_keys(&mut self, keys: &[egui::Key], bytes_per_row: usize) -> Option<usize> {
+        if keys.is_empty() || self.selection.blocked {
+            return None;
+        }
+        let [_, mut cursor] = self.selection.range?;
+
+        for key in keys {
+            let target = match key {
+                egui::Key::ArrowLeft => cursor
+                    .checked_sub(1)
+                    .and_then(|a| prev_data_addr(&self.ih, a)),
+                egui::Key::ArrowRight => cursor
+                    .checked_add(1)
+                    .and_then(|a| next_data_addr(&self.ih, a)),
+                egui::Key::ArrowUp => cursor
+                    .checked_sub(bytes_per_row)
+                    .and_then(|a| prev_data_addr(&self.ih, a)),
+                egui::Key::ArrowDown => cursor
+                    .checked_add(bytes_per_row)
+                    .and_then(|a| next_data_addr(&self.ih, a)),
+                _ => None,
+            };
+            if let Some(addr) = target {
+                cursor = addr;
+            }
+        }
+
+        self.selection.range = Some([cursor, cursor]);
+        Some(cursor)
+    }
+
     /// Displays the central panel of the UI for rendering the hex editor content.
     /// This function draws the main content area of the application. It uses the `egui::CentralPanel`
     /// to define the central region and implements a scrollable hex view with UI event handling.
@@ -15,9 +81,6 @@ impl HexSession {
         events: &EventState,
     ) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            // Align to 0x10 so every printed row address ends with '0'
-            const ROW_ADDR_ALIGN: usize = 0x10;
-
             // Show placeholder for empty files
             if self.ih.size == 0 {
                 ui.vertical_centered(|ui| {
@@ -30,19 +93,22 @@ impl HexSession {
                 });
                 return;
             }
-            let align_down = |addr: usize| addr & !(ROW_ADDR_ALIGN - 1);
             let align_up = |addr: usize| (addr + (ROW_ADDR_ALIGN - 1)) & !(ROW_ADDR_ALIGN - 1);
 
             // Get start and end addresses of the visible area. Find total rows to display.
-            let display_start = align_down(*self.addr.start());
+            let display_start = self.display_start();
             let display_end = align_up((*self.addr.end()).saturating_add(1));
             let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
             // Get row height in pixels (depends on font size)
             let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
 
-            // Create a scroll area. Scroll if search or addr jump is triggered.
-            self.create_step_scroll(bytes_per_row).show_rows(
+            // Move the cursor before creating the scroll area, so the view follows it this frame
+            let cursor = self.handle_arrow_keys(&events.arrow_keys_pressed, bytes_per_row);
+
+            // Create a scroll area. Scroll if search or addr jump is triggered,
+            // or the cursor was moved by the arrow keys.
+            self.create_step_scroll(bytes_per_row, cursor).show_rows(
                 ui,
                 font_height,
                 total_rows,
@@ -106,30 +172,6 @@ impl HexSession {
                 display_start,
                 &bytes[i * bytes_per_row..(i + 1) * bytes_per_row],
             );
-        }
-
-        // Handle arrow key events
-        // TODO: jump over empty bytes and up down presses
-        if let Some(r) = self.selection.range.as_mut() {
-            match events.arrow_key_released {
-                Some(egui::Key::ArrowLeft) => {
-                    r[0] = r[0].saturating_sub(1);
-                    r[1] = r[0];
-                }
-                Some(egui::Key::ArrowRight) => {
-                    r[0] = r[0].saturating_add(1);
-                    r[1] = r[0];
-                }
-                Some(egui::Key::ArrowUp) => {
-                    r[0] = r[0].saturating_sub(bytes_per_row);
-                    r[1] = r[0];
-                }
-                Some(egui::Key::ArrowDown) => {
-                    r[0] = r[0].saturating_add(bytes_per_row);
-                    r[1] = r[0];
-                }
-                _ => {}
-            }
         }
     }
 
