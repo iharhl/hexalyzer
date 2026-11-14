@@ -49,12 +49,16 @@ impl HexViewerApp {
         // Only scale down if we actually exceed the available space
         // Scale to the closest .05 downwards min some margin
         let scale_factor = if total_ideal_width > available_width {
-            (available_width / total_ideal_width * 30.0).floor() / 30.0 - 0.03
+            ((available_width / total_ideal_width * 30.0).floor() / 30.0 - 0.03).max(0.0)
         } else {
             1.0
         };
 
-        ideal_widths.iter().map(|w| w * scale_factor).collect()
+        ideal_widths
+            .iter()
+            // Keep room for the close button and for the name
+            .map(|w| (w * scale_factor).max(40.0))
+            .collect()
     }
 
     /// Show tabs with the list of open files.

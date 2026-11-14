@@ -79,7 +79,8 @@ pub fn tab_style_button<R>(
         .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
             if fixed_width > 0.0 {
-                ui.set_width(fixed_width - 12.0); // 12.0 is the horizontal inner_margin (6*2)
+                // 12.0 is the horizontal inner_margin (6*2)
+                ui.set_width((fixed_width - 12.0).max(0.0));
             }
 
             ui.horizontal(|ui| {

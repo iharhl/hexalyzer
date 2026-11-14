@@ -54,7 +54,8 @@ impl StepScrollArea {
         // Make view boundary.
         // Visible rows are not fully accurate. Had to add margin for a more consistent display.
         let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
-        let visible_rows = (rect.height() / full_row_size).floor() as usize;
+        // At least one row is always treated as visible (tiny windows).
+        let visible_rows = ((rect.height() / full_row_size).floor() as usize).max(1);
 
         // Scroll just enough to keep the followed row in view.
         // The last visible row can be clipped, so it does not count as in view.
@@ -129,6 +130,10 @@ fn draw_custom_scrollbar(
 
     // Travel range is the track height minus the handle height
     let travel_range = scrollbar_rect.height() - handle_height;
+    if travel_range <= 0.0 {
+        // The track is too short to fit the handle (tiny window)
+        return;
+    }
     let progress = top_row as f32 / max_top_row as f32;
     let handle_y_offset = progress * travel_range;
 

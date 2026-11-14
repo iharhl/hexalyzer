@@ -40,7 +40,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_icon(load_icon())
             .with_resizable(true)
-            .with_inner_size([960.0, 720.0]),
+            .with_inner_size([960.0, 720.0])
+            .with_min_inner_size([480.0, 320.0]),
         ..Default::default()
     };
     eframe::run_native(
