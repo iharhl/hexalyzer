@@ -249,8 +249,6 @@ impl IntelHex {
     /// - Returns an error if there is an issue during filling the internal buffer
     ///
     fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
-        let mut count: usize = 0;
-
         let raw_bytes = raw_bytes.strip_prefix(UTF8_BOM).unwrap_or(raw_bytes);
 
         // Iterate over lines of records
@@ -262,10 +260,10 @@ impl IntelHex {
                 continue;
             }
 
-            count = idx + 1;
+            let line_no = idx + 1;
 
             let record =
-                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, count))?;
+                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, line_no))?;
 
             // Fill in self
             match record.rtype {
@@ -275,12 +273,20 @@ impl IntelHex {
                     if !record.data.is_empty() {
                         let new_end_addr = addr + record.data.len();
 
+                        // For now, limit the address range to u32 limit
+                        if new_end_addr - 1 > u32::MAX as usize {
+                            return Err(IntelHexError::ParseRecordError(
+                                IntelHexErrorKind::AddressRangeOverflow,
+                                line_no,
+                            ));
+                        }
+
                         // Check for overlaps
                         self.check_no_overlap(addr, new_end_addr)
                             .map_err(|overlap_addr| {
                                 IntelHexError::ParseRecordError(
                                     IntelHexErrorKind::RecordAddressOverlap(overlap_addr),
-                                    count,
+                                    line_no,
                                 )
                             })?;
 
@@ -299,7 +305,7 @@ impl IntelHex {
                     if self.start_addr.is_some() {
                         return Err(IntelHexError::ParseRecordError(
                             IntelHexErrorKind::DuplicateStartAddress,
-                            count,
+                            line_no,
                         ));
                     }
 
@@ -314,17 +320,6 @@ impl IntelHex {
                     }
                 }
             }
-        }
-
-        // For now, limit the address range to u32 limit.
-        // Check at the end to not hinder the parsing performance.
-        if let Some(max_addr) = self.get_max_addr()
-            && max_addr > u32::MAX as usize
-        {
-            return Err(IntelHexError::ParseRecordError(
-                IntelHexErrorKind::AddressRangeOverflow,
-                count,
-            ));
         }
 
         Ok(())
@@ -410,6 +405,7 @@ impl IntelHex {
     ///
     /// # Errors
     /// Returns an error if the file cannot be read or parsed.
+    /// Returns an error if the data extends beyond the 32-bit address range.
     ///
     /// # Example
     /// ```
@@ -433,6 +429,7 @@ impl IntelHex {
     ///
     /// # Errors
     /// Returns an error if the file cannot be read or parsed.
+    /// Returns an error if the data extends beyond the 32-bit address range.
     ///
     /// # Example
     /// ```
@@ -452,6 +449,13 @@ impl IntelHex {
         // Read the contents of the file
         let data = std::fs::read(&filepath)?;
 
+        // For now, limit the address range to u32 limit.
+        if base_address > u32::MAX as usize || data.len() > u32::MAX as usize - base_address + 1 {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::AddressRangeOverflow,
+            ));
+        }
+
         // Clear provided IntelHex instance
         self.clear();
 
@@ -461,8 +465,10 @@ impl IntelHex {
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
-        // Load data bytes into the map as one chunk
-        self.buffer.insert(base_address, data);
+        // Load data bytes into the map as one chunk. Empty file holds no data.
+        if !data.is_empty() {
+            self.buffer.insert(base_address, data);
+        }
 
         Ok(())
     }
@@ -475,6 +481,7 @@ impl IntelHex {
     ///
     /// # Errors
     /// Returns an error if the file cannot be written.
+    /// Returns an error if the data extends beyond the 32-bit address range
     ///
     /// # Example
     /// ```
@@ -486,6 +493,14 @@ impl IntelHex {
     /// assert_eq!(ih.size, 68);
     /// ```
     pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
+        if let Some(max_addr) = self.get_max_addr()
+            && max_addr > u32::MAX as usize
+        {
+            return Err(IntelHexError::CreateRecordError(
+                IntelHexErrorKind::AddressRangeOverflow,
+            ));
+        }
+
         // Ensure the parent directory exists
         if let Some(parent) = filepath.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
@@ -2456,6 +2471,118 @@ mod tests {
                 IntelHexErrorKind::DuplicateStartAddress,
                 2
             ))
+        );
+    }
+
+    #[test]
+    fn test_parse_address_range_limit() {
+        // Arrange: ELA 0xFFFF, then 8 bytes at 0xFFFFFFF8 (last byte at exactly u32::MAX)
+        let mut ih = IntelHex::new();
+        let raw = format!(":02000004FFFFFC\n:08FFF800000000000000000001\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
+    }
+
+    #[test]
+    fn test_parse_address_overflow_line() {
+        // Arrange: ELA 0xFFFF, then 16 bytes at 0xFFFFFFF8 on line 2 (crosses u32::MAX)
+        let mut ih = IntelHex::new();
+        let raw =
+            format!(":02000004FFFFFC\n:10FFF80000000000000000000000000000000000F9\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert: the offending record's line is reported and not the last line
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::AddressRangeOverflow,
+                2
+            ))
+        );
+    }
+
+    #[test]
+    fn test_load_bin_address_overflow() {
+        // Arrange
+        let path = "tests/fixtures/ih_valid_1.bin";
+        let len = 51596;
+        let max_base = u32::MAX as usize - len + 1;
+
+        // Act & Assert: last byte at exactly u32::MAX is accepted
+        let mut ih = IntelHex::new();
+        assert!(ih.load_bin(path, max_base).is_ok());
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
+
+        // Act & Assert: one byte beyond u32::MAX is rejected, instance unchanged
+        let mut ih = IntelHex::new();
+        ih.parse(format!("{REC_DATA_A}\n{REC_EOF}\n").as_bytes())
+            .unwrap_or_default();
+        let original = ih.clone();
+
+        for base in [max_base + 1, u32::MAX as usize + 1, usize::MAX] {
+            let res = ih.load_bin(path, base);
+
+            assert_eq!(
+                res,
+                Err(IntelHexError::UpdateError(
+                    IntelHexErrorKind::AddressRangeOverflow
+                )),
+                "base 0x{base:X}"
+            );
+            assert_eq!(ih.buffer, original.buffer, "base 0x{base:X}");
+            assert_eq!(ih.size, original.size, "base 0x{base:X}");
+        }
+    }
+
+    #[test]
+    fn test_load_bin_empty_file() {
+        // Arrange
+        let path = "build/ut_load_bin_empty/empty.bin";
+        std::fs::create_dir_all("build/ut_load_bin_empty").unwrap_or_default();
+        std::fs::write(path, []).unwrap_or_default();
+
+        // Act
+        let mut ih = IntelHex::new();
+        let res = ih.load_bin(path, 0x0);
+
+        // Assert: no empty chunk is stored
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+        assert_eq!(ih.get_max_addr(), None);
+    }
+
+    #[test]
+    fn test_write_hex_address_overflow() {
+        // Arrange: data above the 32-bit range and an existing output file
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0xFFFF_FFF0, vec![0x0; 0x20]);
+        ih.size = 0x20;
+
+        let path = "build/ut_write_hex_overflow/ih.hex";
+        std::fs::create_dir_all("build/ut_write_hex_overflow").unwrap_or_default();
+        std::fs::write(path, "original").unwrap_or_default();
+
+        // Act
+        let res = ih.write_hex(path);
+
+        // Assert: error is returned and the existing file is untouched
+        assert_eq!(
+            res,
+            Err(IntelHexError::CreateRecordError(
+                IntelHexErrorKind::AddressRangeOverflow
+            ))
+        );
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap_or_default(),
+            "original"
         );
     }
 
