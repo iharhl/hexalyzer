@@ -13,6 +13,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// UTF-8 byte order mark. Some editors (e.g. Notepad) put it at the start of text files.
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
 #[derive(Debug, Clone)]
 pub struct IntelHex {
     /// Absolute path to the loaded file
@@ -248,15 +251,18 @@ impl IntelHex {
     fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
         let mut count: usize = 0;
 
+        let raw_bytes = raw_bytes.strip_prefix(UTF8_BOM).unwrap_or(raw_bytes);
+
         // Iterate over lines of records
-        for line in raw_bytes.split(|&b| b == b'\n') {
-            let line = line.strip_suffix(b"\r").unwrap_or(line);
+        for (idx, line) in raw_bytes.split(|&b| b == b'\n').enumerate() {
+            // Tolerate surrounding whitespace (CRLF, spaces, tabs)
+            let line = line.trim_ascii();
 
             if line.is_empty() {
                 continue;
             }
 
-            count += 1;
+            count = idx + 1;
 
             let record =
                 Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, count))?;
@@ -293,7 +299,7 @@ impl IntelHex {
                     if self.start_addr.is_some() {
                         return Err(IntelHexError::ParseRecordError(
                             IntelHexErrorKind::DuplicateStartAddress,
-                            count + 1,
+                            count,
                         ));
                     }
 
@@ -373,6 +379,31 @@ impl IntelHex {
         self.size = self.buffer.values().map(Vec::len).sum();
 
         Ok(())
+    }
+
+    /// Returns `true` if the content is Intel HEX, judged by its first record: the first
+    /// non-blank line (after an optional UTF-8 BOM and surrounding whitespace) must be a
+    /// valid record.
+    ///
+    /// Only the first record is checked to confirm the format. Records further down
+    /// may still be invalid, loading the hex itself would report those.
+    ///
+    /// # Example
+    /// ```
+    /// use intelhexlib::IntelHex;
+    ///
+    /// assert!(IntelHex::is_intel_hex(b"\n:00000001FF\n"));
+    /// assert!(!IntelHex::is_intel_hex(b":\x00\x01\x02 binary data"));
+    /// ```
+    #[must_use]
+    pub fn is_intel_hex(raw_bytes: &[u8]) -> bool {
+        let raw_bytes = raw_bytes.strip_prefix(UTF8_BOM).unwrap_or(raw_bytes);
+
+        raw_bytes
+            .split(|&b| b == b'\n')
+            .map(<[u8]>::trim_ascii)
+            .find(|line| !line.is_empty())
+            .is_some_and(|line| Record::parse(line).is_ok())
     }
 
     /// Creates an `IntelHex` instance and fills it with data from the provided binary.
@@ -1331,7 +1362,8 @@ impl IntelHex {
     }
 
     /// Window slide search for a byte array in the `IntelHex` data.
-    /// Returns start addresses of matches.
+    /// Returns start addresses of matches, sorted in ascending order.
+    /// Matches may overlap.
     ///
     /// # Example
     /// ```
@@ -1348,7 +1380,7 @@ impl IntelHex {
     }
 
     /// Window slide search for an ASCII string in the `IntelHex` data.
-    /// Returns start addresses of matches.
+    /// Returns start addresses of matches, sorted in ascending order.
     ///
     /// If `regex` flag is set to true, the pattern is interpreted as a regular expression.
     /// Otherwise, it is interpreted as a literal string.
@@ -2336,6 +2368,116 @@ mod tests {
                 IntelHexErrorKind::InvalidAddress(0x100F)
             ))
         );
+    }
+
+    // Valid records used by the parse / detection tests
+    const REC_DATA_A: &str = ":0100000041BE"; // 1 byte 'A' at 0x0000
+    const REC_DATA_B: &str = ":0100010042BC"; // 1 byte 'B' at 0x0001
+    const REC_START: &str = ":0400000500000000F7"; // start linear address 0
+    const REC_EOF: &str = ":00000001FF";
+
+    #[test]
+    fn test_parse_with_utf8_bom() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let raw = format!("\u{FEFF}{REC_DATA_A}\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.read_byte(0x0), Some(b'A'));
+    }
+
+    #[test]
+    fn test_parse_with_surrounding_whitespace() {
+        // Arrange: blank lines, indentation, trailing spaces/tabs, CRLF
+        let mut ih = IntelHex::new();
+        let raw = format!("\n\r\n  {REC_DATA_A}  \r\n\t{REC_DATA_B}\t\n \n{REC_EOF}\r\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.read_byte(0x0), Some(b'A'));
+        assert_eq!(ih.read_byte(0x1), Some(b'B'));
+    }
+
+    #[test]
+    fn test_parse_error_line_counts_blank_lines() {
+        // Arrange: bad record on physical line 4
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_DATA_A}\n\n\n:0100010042BD\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::RecordChecksumMismatch(0xBC, 0xBD),
+                4
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_duplicate_start_address_line() {
+        // Arrange: second start address record on line 2
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_START}\n{REC_START}\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::DuplicateStartAddress,
+                2
+            ))
+        );
+    }
+
+    #[test]
+    fn test_is_intel_hex_valid() {
+        assert!(IntelHex::is_intel_hex(REC_EOF.as_bytes()));
+        assert!(IntelHex::is_intel_hex(
+            format!("{REC_DATA_A}\n{REC_EOF}\n").as_bytes()
+        ));
+        // BOM, blank lines and indentation before the first record
+        assert!(IntelHex::is_intel_hex(
+            format!("\u{FEFF}\r\n\n  {REC_DATA_A}\r\n").as_bytes()
+        ));
+        // Only the first record is checked (a truncated file start is fine)
+        assert!(IntelHex::is_intel_hex(
+            format!("{REC_DATA_A}\n:10C20000E0A5").as_bytes()
+        ));
+    }
+
+    #[test]
+    fn test_is_intel_hex_invalid() {
+        // Empty or blank
+        assert!(!IntelHex::is_intel_hex(b""));
+        assert!(!IntelHex::is_intel_hex(b" \r\n\t\n"));
+        assert!(!IntelHex::is_intel_hex(b"\xEF\xBB\xBF"));
+        // Binary that starts with ':' (0x3A)
+        assert!(!IntelHex::is_intel_hex(b":\x00\x01\x02\xFF\xFE"));
+        assert!(!IntelHex::is_intel_hex(b":"));
+        // Text that starts with ':' but is not a valid record
+        assert!(!IntelHex::is_intel_hex(b":hello world\n"));
+        assert!(!IntelHex::is_intel_hex(b":0100000041BF\n")); // bad checksum
+        assert!(!IntelHex::is_intel_hex(b":01000000\n")); // too short
+        // First record must come first: junk before it is not skipped
+        assert!(!IntelHex::is_intel_hex(
+            format!("junk\n{REC_EOF}\n").as_bytes()
+        ));
+        // Other formats
+        assert!(!IntelHex::is_intel_hex(b"\x7FELF\x02\x01\x01\x00"));
     }
 }
 

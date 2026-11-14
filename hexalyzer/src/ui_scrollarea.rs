@@ -1,22 +1,28 @@
 use crate::app::HexSession;
 use eframe::egui;
 
+/// Where to scroll the view this frame
+#[derive(Clone, Copy)]
+pub enum ScrollTarget {
+    /// Put this row at the top of the view
+    Top(usize),
+    /// Bring this row into view with the least scrolling
+    Follow(usize),
+}
+
 /// Custom scroll area that scrolls in discrete steps
 pub struct StepScrollArea {
     id: egui::Id,
-    target_row: Option<usize>,
+    target: Option<ScrollTarget>,
 }
 
 impl StepScrollArea {
     pub const fn new(id: egui::Id) -> Self {
-        Self {
-            id,
-            target_row: None,
-        }
+        Self { id, target: None }
     }
 
-    pub const fn with_target_row(mut self, row: Option<usize>) -> Self {
-        self.target_row = row;
+    pub const fn with_target(mut self, target: Option<ScrollTarget>) -> Self {
+        self.target = target;
         self
     }
 
@@ -32,9 +38,10 @@ impl StepScrollArea {
         let (rect, _response) = ui.allocate_at_least(ui.available_size(), egui::Sense::click());
 
         // Get / set row state
-        let mut top_row = self
-            .target_row
-            .unwrap_or_else(|| ui.data_mut(|d| *d.get_temp_mut_or_default(self.id)));
+        let mut top_row = match self.target {
+            Some(ScrollTarget::Top(row)) => row,
+            _ => ui.data_mut(|d| *d.get_temp_mut_or_default(self.id)),
+        };
 
         // Make discrete scroll logic (one row is a scroll step).
         // Add threshold to ignore small drifts.
@@ -47,7 +54,20 @@ impl StepScrollArea {
         // Make view boundary.
         // Visible rows are not fully accurate. Had to add margin for a more consistent display.
         let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
-        let visible_rows = (rect.height() / full_row_size).floor() as usize;
+        // At least one row is always treated as visible (tiny windows).
+        let visible_rows = ((rect.height() / full_row_size).floor() as usize).max(1);
+
+        // Scroll just enough to keep the followed row in view.
+        // The last visible row can be clipped, so it does not count as in view.
+        if let Some(ScrollTarget::Follow(row)) = self.target {
+            let fully_visible_rows = visible_rows.saturating_sub(1).max(1);
+            if row < top_row {
+                top_row = row;
+            } else if row >= top_row + fully_visible_rows {
+                top_row = row + 1 - fully_visible_rows;
+            }
+        }
+
         // Allow 1 empty row at the bottom
         let max_top_row = total_rows.saturating_sub(visible_rows - 1);
         top_row = top_row.min(max_top_row);
@@ -110,6 +130,10 @@ fn draw_custom_scrollbar(
 
     // Travel range is the track height minus the handle height
     let travel_range = scrollbar_rect.height() - handle_height;
+    if travel_range <= 0.0 {
+        // The track is too short to fit the handle (tiny window)
+        return;
+    }
     let progress = top_row as f32 / max_top_row as f32;
     let handle_y_offset = progress * travel_range;
 
@@ -156,23 +180,31 @@ fn draw_custom_scrollbar(
 }
 
 impl HexSession {
-    /// Helper to convert address to row index. Offsets so that the target row is 3 rows
-    /// after the start of the visible area (if possible).
-    const fn get_target_row(&self, addr: usize, bytes_per_row: usize) -> usize {
-        let byte_idx = addr.saturating_sub(*self.addr.start());
-        (byte_idx / bytes_per_row).saturating_sub(3)
+    /// Helper to convert address to the index of the row that displays it
+    const fn get_row(&self, addr: usize, bytes_per_row: usize) -> usize {
+        addr.saturating_sub(self.display_start()) / bytes_per_row
     }
 
-    /// Create `StepScrollArea` - a custom scroll area with row-wise discrete steps
-    pub(crate) fn create_step_scroll(&self, bytes_per_row: usize) -> StepScrollArea {
-        let mut target_row = None;
+    /// Create `StepScrollArea` - a custom scroll area with row-wise discrete steps.
+    /// Search results and address jumps scroll to put the address near the top, and if
+    /// the selection is moving - keep it in view.
+    pub(crate) fn create_step_scroll(
+        &self,
+        bytes_per_row: usize,
+        follow_addr: Option<usize>,
+    ) -> StepScrollArea {
+        // Priority: search result, then address jump, then the cursor
+        let target = self
+            .search
+            .addr
+            .or(self.jump_to.addr)
+            // Offset so that the target row is 3 rows after the start of the visible area
+            // (if possible)
+            .map(|addr| ScrollTarget::Top(self.get_row(addr, bytes_per_row).saturating_sub(3)))
+            .or_else(|| {
+                follow_addr.map(|addr| ScrollTarget::Follow(self.get_row(addr, bytes_per_row)))
+            });
 
-        if let Some(addr) = self.search.addr {
-            target_row = Some(self.get_target_row(addr, bytes_per_row));
-        } else if let Some(addr) = self.jump_to.addr {
-            target_row = Some(self.get_target_row(addr, bytes_per_row));
-        }
-
-        StepScrollArea::new(egui::Id::new(self.scroll_id)).with_target_row(target_row)
+        StepScrollArea::new(egui::Id::new(self.scroll_id)).with_target(target)
     }
 }

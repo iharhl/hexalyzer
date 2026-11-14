@@ -1,4 +1,4 @@
-use crate::app::HexSession;
+use crate::app::{EnterAction, HexSession};
 use crate::events::EventState;
 use eframe::egui;
 
@@ -22,14 +22,14 @@ struct SearchState {
 pub struct Search {
     /// Start address of the search results
     pub(crate) addr: Option<usize>,
-    /// List of addresses where the match was found
+    /// List of addresses where the match was found (sorted ascending)
     pub(crate) results: Vec<usize>,
     /// Length of the search pattern in bytes
     pub(crate) length: usize,
-    /// Does the search text field have focus
-    pub(crate) has_focus: bool,
     /// Index of the current search result
     idx: usize,
+    /// Address of the current search result before a redo
+    resume_from: Option<usize>,
 
     // -- UI control flags
     /// Force the search to be performed even if the input is the same as the last one
@@ -47,13 +47,13 @@ pub struct Search {
 impl Search {
     /// Clear the search state
     pub(crate) fn clear(&mut self) {
-        self.has_focus = false;
         self.addr = None;
         self.results.clear();
         self.length = 0;
         // Do not clear current to preserve text box content
         self.last = SearchState::default();
         self.idx = 0;
+        self.resume_from = None;
         self.force = false;
     }
 
@@ -62,8 +62,12 @@ impl Search {
         // In case the current input field is not valid
         self.current = self.last.clone();
 
+        // Remember the current hit to keep the position after the redo
+        let resume_from = self.results.get(self.idx).copied();
+
         // Clear
         self.clear();
+        self.resume_from = resume_from;
 
         // Set force flag
         self.force = true;
@@ -72,6 +76,15 @@ impl Search {
     /// Force to loose focus from the text field
     pub(crate) const fn loose_focus(&mut self) {
         self.loose_focus = true;
+    }
+
+    /// Check if `addr` lies inside the search match.
+    ///
+    /// Relies on `results` being sorted ascending. The last match starting at
+    /// or before `addr` is the only one that can cover it.
+    pub(crate) fn is_hit(&self, addr: usize) -> bool {
+        let n = self.results.partition_point(|&start| start <= addr);
+        n > 0 && addr < self.results[n - 1].saturating_add(self.length)
     }
 }
 
@@ -106,15 +119,16 @@ impl HexSession {
         }
 
         if textedit.has_focus() {
-            self.jump_to.has_focus = false;
-            self.search.has_focus = true;
+            self.enter_action = Some(EnterAction::Search);
 
             // Clear the selection to avoid modifying bytes
             // while typing in the search area
             self.selection.clear();
         }
 
-        if (events.enter_released && self.search.has_focus) || self.search.force {
+        if (events.enter_released && self.enter_action == Some(EnterAction::Search))
+            || self.search.force
+        {
             // Same input -> move to next result, otherwise -> search again
             if self.search.current == self.search.last {
                 if !self.search.results.is_empty() {
@@ -159,9 +173,21 @@ impl HexSession {
                     self.search.results.clear();
                 }
 
+                // Verify that the results are sorted which is required for
+                // correct highlighting of the search hit.
+                debug_assert!(self.search.results.is_sorted());
+
                 // Reset the state of search
                 self.search.idx = 0;
                 self.search.last = self.search.current.clone();
+
+                // After a redo -> select closest hit
+                if let Some(addr) = self.search.resume_from.take() {
+                    let i = self.search.results.partition_point(|&start| start < addr);
+                    if i < self.search.results.len() {
+                        self.search.idx = i;
+                    }
+                }
             }
 
             // Set address to scroll to (only if not forced)
@@ -190,7 +216,7 @@ impl HexSession {
 }
 
 fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len().is_multiple_of(2) {
+    if s.is_ascii() && s.len().is_multiple_of(2) {
         return (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())

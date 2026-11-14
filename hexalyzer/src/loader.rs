@@ -19,26 +19,31 @@ pub fn get_last_modified(path: &PathBuf) -> std::io::Result<std::time::SystemTim
     std::fs::metadata(path).map(|meta| meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
 }
 
+/// Number of bytes read from the start of a file to detect its kind
+const DETECT_LEN: u64 = 4096;
+
+/// Detect the file kind. A known extension decide the type, otherwise the content is checked.
 fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
-    let mut f = File::open(path)?;
+    let mut buf = Vec::new();
+    File::open(path)?.take(DETECT_LEN).read_to_end(&mut buf)?;
 
-    // Read the first 32 bytes (OK if file has less)
-    let mut buf = [0u8; 32];
-    let n = f.read(&mut buf)?;
-    let buf = &buf[..n];
-
-    // If read 0 bytes -> Unknown
-    if n == 0 {
+    // Empty file -> Unknown
+    if buf.is_empty() {
         return Ok(FileKind::Unknown);
     }
 
+    // A known extension is detected
+    if let Some(kind) = kind_from_extension(path) {
+        return Ok(kind);
+    }
+
     // ELF magic check
-    if buf.len() >= 4 && &buf[..4] == b"\x7FELF" {
+    if buf.starts_with(b"\x7FELF") {
         return Ok(FileKind::Elf);
     }
 
-    // Intel HEX record start check
-    if buf[0] == b':' {
+    // Intel HEX: the first non-blank line must be a valid record
+    if IntelHex::is_intel_hex(&buf) {
         return Ok(FileKind::Hex);
     }
 
@@ -46,16 +51,17 @@ fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
     Ok(FileKind::Bin)
 }
 
-/// Determine file kind from a file path extension
-pub fn kind_from_extension(path: &std::path::Path) -> FileKind {
+/// File kind named by the path extension, or `None` for other/no extension
+fn kind_from_extension(path: &std::path::Path) -> Option<FileKind> {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("hex") => FileKind::Hex,
-        _ => FileKind::Bin,
+        Some("hex" | "ihx" | "ihex") => Some(FileKind::Hex),
+        Some("bin") => Some(FileKind::Bin),
+        _ => None,
     }
 }
 
@@ -86,6 +92,95 @@ pub fn write_ih_to_path(
         FileKind::Bin => ih.write_bin(path, gap_fill).map_err(|e| e.to_string()),
         _ => Err("Cannot write: unknown file format".to_string()),
     }
+}
+
+/// Gap-fill size above which a `.bin` write must be confirmed by the user
+const LARGE_GAP_FILL_SIZE: usize = 64 * 1024 * 1024;
+
+/// Number of gap-fill bytes a `.bin` write adds on top of the actual data.
+pub fn bin_gap_fill_size(ih: &IntelHex) -> usize {
+    match (ih.get_min_addr(), ih.get_max_addr()) {
+        (Some(min), Some(max)) => (max - min).saturating_add(1).saturating_sub(ih.size),
+        _ => 0,
+    }
+}
+
+/// Format a byte count for display, e.g. `512 B`, `1.5 KiB`, `4.0 GiB`
+pub fn format_size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+
+    let bytes = bytes as u128;
+    let mut unit = 1024u128;
+    let mut idx = 0;
+    while idx + 1 < UNITS.len() && bytes >= unit * 1024 {
+        unit *= 1024;
+        idx += 1;
+    }
+    let tenths = bytes * 10 / unit;
+    format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[idx])
+}
+
+/// Ask the user to confirm a `.bin` write that is mostly gap fill.
+/// Returns `true` if the write should proceed.
+fn confirm_large_write(ih: &IntelHex, kind: &FileKind) -> bool {
+    if *kind != FileKind::Bin {
+        return true;
+    }
+
+    let gap_fill = bin_gap_fill_size(ih);
+    if gap_fill < LARGE_GAP_FILL_SIZE {
+        return true;
+    }
+
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Large file")
+        .set_description(format!(
+            "This will write a {} binary file: {} of data, the rest is gap fill.\n\n\
+             Continue?",
+            format_size(gap_fill.saturating_add(ih.size)),
+            format_size(ih.size),
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show();
+
+    matches!(result, rfd::MessageDialogResult::Ok)
+}
+
+/// Returns `true` if the file at `path` was modified on disk since `last_modified`
+/// (the time it was loaded or last saved by this app).
+fn changed_on_disk(path: &PathBuf, last_modified: std::time::SystemTime) -> bool {
+    get_last_modified(path)
+        .is_ok_and(|t| t != std::time::SystemTime::UNIX_EPOCH && t != last_modified)
+}
+
+/// Ask the user to confirm overwriting a file that was modified on disk since it was
+/// loaded. Returns `true` if the write should proceed.
+fn confirm_overwrite_if_changed(path: &PathBuf, last_modified: std::time::SystemTime) -> bool {
+    if !changed_on_disk(path, last_modified) {
+        return true;
+    }
+
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("File changed on disk")
+        .set_description(format!(
+            "\"{name}\" has been modified on disk since it was opened.\n\n\
+             Overwrite it with your version? The changes on disk will be lost."
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show();
+
+    matches!(result, rfd::MessageDialogResult::Ok)
 }
 
 impl HexViewerApp {
@@ -143,6 +238,7 @@ impl HexViewerApp {
         // Re-calculate address range
         new_session.addr =
             new_session.ih.get_min_addr().unwrap_or(0)..=new_session.ih.get_max_addr().unwrap_or(0);
+        new_session.mark_saved();
 
         // Add the new session and switch to it
         self.sessions.push(new_session);
@@ -164,7 +260,7 @@ impl HexViewerApp {
     pub(crate) fn has_unsaved_changes(&self, session_id: usize) -> bool {
         self.sessions
             .get(session_id)
-            .is_some_and(|s| s.dirty || !s.editor.modified.is_empty())
+            .is_some_and(HexSession::has_unsaved_changes)
     }
 
     /// Reload the file from disk, replacing in-memory data.
@@ -201,48 +297,58 @@ impl HexViewerApp {
         };
 
         session.ih = ih;
-        session.addr =
-            session.ih.get_min_addr().unwrap_or(0)..=session.ih.get_max_addr().unwrap_or(0);
         session.last_modified = last_modified;
         session.file_changed_on_disk = false;
         session.file_kind = file_kind;
         session.editor = ByteEdit::default();
-        session.dirty = false;
-        session.search.redo();
+        session.on_layout_changed();
+        session.mark_saved();
     }
 
     /// Save the current session back to its original file path.
     /// Writes in the same format the file was loaded as.
-    /// Clears the dirty state on success.
-    pub(crate) fn save_curr_session(&mut self) {
+    /// Marks the data as saved on success.
+    ///
+    /// Returns `true` on success. Returns `false` if the write failed (error stored in
+    /// `self.error`) or the user canceled a large-file confirmation.
+    pub(crate) fn save_curr_session(&mut self) -> bool {
         let gap_fill = self.gap_fill;
 
         let Some(session) = self.get_curr_session_mut() else {
-            return;
+            return false;
         };
 
         let path = session.ih.filepath.clone();
         if path.as_os_str().is_empty() {
             self.error = Some("No file path associated with this session".into());
-            return;
+            return false;
         }
 
         let file_kind = session.file_kind.clone();
 
+        if !confirm_overwrite_if_changed(&path, session.last_modified) {
+            return false;
+        }
+
+        if !confirm_large_write(&session.ih, &file_kind) {
+            return false;
+        }
+
         if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &file_kind, gap_fill) {
             self.error = Some(msg);
-            return;
+            return false;
         }
 
         let Some(session) = self.get_curr_session_mut() else {
-            return;
+            return false;
         };
 
-        session.editor.modified.clear();
-        session.dirty = false;
+        session.mark_saved();
         session.last_modified =
             get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         session.file_changed_on_disk = false;
+
+        true
     }
 
     /// Show an Export dialog and write a copy of the current session to the chosen path.
@@ -272,11 +378,15 @@ impl HexViewerApp {
         }
 
         let gap_fill = self.gap_fill;
-        let kind = kind_from_extension(&path);
+        let kind = kind_from_extension(&path).unwrap_or(FileKind::Bin);
 
         let Some(session) = self.get_curr_session_mut() else {
             return false;
         };
+
+        if !confirm_large_write(&session.ih, &kind) {
+            return false;
+        }
 
         if let Err(msg) = write_ih_to_path(&mut session.ih, &path, &kind, gap_fill) {
             self.error = Some(msg);
@@ -287,8 +397,7 @@ impl HexViewerApp {
             // Export over the current file itself is equivalent to a save
             Some(index) if index == curr_index => {
                 let session = &mut self.sessions[index];
-                session.editor.modified.clear();
-                session.dirty = false;
+                session.mark_saved();
                 session.file_kind = kind;
                 session.last_modified =
                     get_last_modified(&path).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -309,7 +418,11 @@ impl HexViewerApp {
     /// Intercepts save shortcut at the start of the frame and performs the save
     /// of the current session to its file if it has unsaved changes.
     pub(crate) fn handle_save_shortcut(&mut self, ctx: &egui::Context) {
-        let pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        let pressed = ctx.input_mut(|i| {
+            !i.modifiers.shift
+                && !i.modifiers.alt
+                && i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
+        });
         if !pressed || self.popup.active {
             return;
         }
@@ -332,54 +445,64 @@ impl HexViewerApp {
     /// - `path`: Reference to a `PathBuf` that represents the path of the file to be merged.
     /// - `addr1`: Optional start addr to which the current session's `IntelHex` instance should be relocated.
     /// - `addr2`: Optional start addr to which the contents of the new file should be relocated.
+    ///
+    /// Returns `true` if the merge was applied. On failure, the current session is left
+    /// unchanged and the error is stored.
     pub(crate) fn merge_file_into_curr_session(
         &mut self,
         path: &PathBuf,
         addr1: Option<usize>,
         addr2: Option<usize>,
-    ) {
-        if let Some(cur_session) = self.get_curr_session_mut() {
-            // Relocate the current file to a new start address
-            if let Some(new_start_addr) = addr1 {
-                let old_start_addr = cur_session.ih.get_min_addr();
-
-                let res = cur_session.ih.relocate(new_start_addr);
-
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
-                    return;
-                }
-
-                if let Some(old_start_addr) = old_start_addr {
-                    cur_session
-                        .editor
-                        .remap_modified(new_start_addr, old_start_addr);
-                }
+    ) -> bool {
+        // Load and relocate the selected file first. These steps can fail and must not
+        // leave the current session half-modified.
+        let (mut incoming_ih, _) = match load_file_into_ih(path) {
+            Ok(result) => result,
+            Err(msg) => {
+                self.error = Some(msg);
+                return false;
             }
+        };
 
-            // Load the selected file into a new IntelHex instance
-            let (mut new_ih, _) = match load_file_into_ih(path) {
-                Ok(result) => result,
-                Err(msg) => {
-                    self.error = Some(msg);
-                    return;
-                }
-            };
-
-            // Relocate the selected file to a new start address
-            if let Some(new_start_addr) = addr2 {
-                let res = new_ih.relocate(new_start_addr);
-
-                if let Err(msg) = res {
-                    self.error = Some(msg.to_string());
-                    return;
-                }
-            }
-
-            // Merge the two IntelHex instances
-            cur_session.ih.merge(&new_ih);
-        } else {
-            self.error = Some("Could not get current hex session".to_string());
+        if let Some(new_start_addr) = addr2
+            && let Err(err) = incoming_ih.relocate(new_start_addr)
+        {
+            self.error = Some(err.to_string());
+            return false;
         }
+
+        let Some(cur_session) = self.get_curr_session_mut() else {
+            self.error = Some("Could not get current hex session".to_string());
+            return false;
+        };
+
+        // Relocate the current file to a new start address.
+        // `relocate` validates before changing anything, so on error the session is unchanged.
+        if let Some(new_start_addr) = addr1 {
+            let old_start_addr = cur_session.ih.get_min_addr();
+
+            if let Err(err) = cur_session.ih.relocate(new_start_addr) {
+                self.error = Some(err.to_string());
+                return false;
+            }
+
+            if let Some(old_start_addr) = old_start_addr {
+                cur_session
+                    .editor
+                    .remap_modified(new_start_addr, old_start_addr);
+            }
+        }
+
+        // Merge the two IntelHex instances (cannot fail)
+        cur_session.ih.merge(&incoming_ih);
+
+        // Forget edits of bytes overwritten by the merged file, so "Restore" does not
+        // write the pre-edit values over the merged data
+        cur_session
+            .editor
+            .modified
+            .retain(|&addr, _| incoming_ih.read_byte(addr).is_none());
+
+        true
     }
 }

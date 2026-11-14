@@ -8,7 +8,15 @@ impl HexViewerApp {
     /// - Cmd+C / Ctrl+C for hex bytes
     /// - Shift+Cmd+C / Ctrl+Shift+C for ASCII string
     /// - Opt+C / Alt+C for address
+    ///
+    /// Does nothing while a text field has keyboard focus, allowing to copy the
+    /// selected text inside.
     pub(crate) fn handle_copy_shortcut(&self, ctx: &egui::Context) {
+        // A focused text field handles its own Copy event
+        if ctx.text_edit_focused() {
+            return;
+        }
+
         let (copy_hex, copy_ascii, copy_addr) = ctx.input_mut(|i| {
             let mut hex = false;
             let mut ascii = false;

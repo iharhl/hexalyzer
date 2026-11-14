@@ -1,8 +1,13 @@
 use crate::HexViewerApp;
 use crate::app::colors;
 use crate::events;
+use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
+
+/// Maximum size of a range that can be inserted at once. Guards against typos
+/// allocating gigabytes on the UI thread.
+const MAX_INSERT_RANGE_SIZE: usize = 256 * 1024 * 1024;
 
 //  ========================== Close Action ================================== //
 
@@ -184,15 +189,11 @@ impl PopupState {
                     return;
                 }
 
-                curr_session.dirty = true;
-
                 if let Some(old_start_addr) = old_start_addr {
                     curr_session.editor.remap_modified(addr, old_start_addr);
                 }
 
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::InsertRange { start, end } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
@@ -203,6 +204,15 @@ impl PopupState {
                     return;
                 };
 
+                if end.saturating_sub(start) >= MAX_INSERT_RANGE_SIZE {
+                    app.error.replace(format!(
+                        "Range is too large: {} (max {})",
+                        loader::format_size((end - start).saturating_add(1)),
+                        loader::format_size(MAX_INSERT_RANGE_SIZE)
+                    ));
+                    return;
+                }
+
                 let Some(curr_session) = app.get_curr_session_mut() else {
                     return;
                 };
@@ -212,11 +222,7 @@ impl PopupState {
                     return;
                 }
 
-                curr_session.dirty = true;
-
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::RemoveRange { start, end } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
@@ -231,20 +237,12 @@ impl PopupState {
                     return;
                 };
 
-                let size_before = curr_session.ih.size;
-
                 if let Err(err) = curr_session.ih.remove_range(start, end) {
                     app.error.replace(err.to_string());
                     return;
                 }
 
-                if curr_session.ih.size != size_before {
-                    curr_session.dirty = true;
-                }
-
-                curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                    ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                curr_session.search.redo();
+                curr_session.on_layout_changed();
             }
             Self::Merge {
                 path,
@@ -254,13 +252,11 @@ impl PopupState {
                 let addr1 = usize::from_str_radix(&addr_current, 16).ok();
                 let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
 
-                app.merge_file_into_curr_session(&path, addr1, addr2);
-
-                if let Some(curr_session) = app.get_curr_session_mut() {
-                    curr_session.dirty = true;
-                    curr_session.addr = curr_session.ih.get_min_addr().unwrap_or(0)
-                        ..=curr_session.ih.get_max_addr().unwrap_or(0);
-                    curr_session.search.redo();
+                // Only update the layout if the merge was actually applied
+                if app.merge_file_into_curr_session(&path, addr1, addr2)
+                    && let Some(curr_session) = app.get_curr_session_mut()
+                {
+                    curr_session.on_layout_changed();
                 }
             }
             Self::Error(_) | Self::About => {}
@@ -280,32 +276,25 @@ impl PopupState {
             .take()
             .unwrap_or(CloseAction::DontSave);
 
-        match action {
-            CloseAction::Save => {
-                app.save_curr_session();
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
-            CloseAction::Export => {
-                if !app.export_curr_session() {
-                    return;
-                }
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
-            CloseAction::DontSave => {
-                if reload_after {
-                    app.reload_file(session_id);
-                } else {
-                    app.close_file(session_id);
-                }
-            }
+        // Swap the active session to the one being closed (in case the user
+        // closes the tab that is not in the view)
+        app.active_index = Some(session_id);
+
+        let saved = match action {
+            CloseAction::Save => app.save_curr_session(),
+            CloseAction::Export => app.export_curr_session(),
+            CloseAction::DontSave => true,
+        };
+
+        // Keep the tab (and its edits) if saving failed or was canceled
+        if !saved {
+            return;
+        }
+
+        if reload_after {
+            app.reload_file(session_id);
+        } else {
+            app.close_file(session_id);
         }
     }
 }

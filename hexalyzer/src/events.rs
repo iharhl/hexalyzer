@@ -9,52 +9,30 @@ pub struct PointerState {
 #[derive(Default, Clone)]
 pub struct EventState {
     pub(crate) last_key_released: Option<egui::Key>,
-    pub(crate) hex_chars_released: Vec<char>,
+    pub(crate) hex_chars: Vec<char>,
     pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
     pub(crate) enter_released: bool,
     pub(crate) shift_down: bool,
-    pub(crate) arrow_key_released: Option<egui::Key>,
-}
-
-#[allow(clippy::enum_glob_use)]
-/// Helper for mapping keys to hex chars
-const fn key_to_hex_char(key: egui::Key) -> Option<char> {
-    use egui::Key::*;
-    Some(match key {
-        Num0 => '0',
-        Num1 => '1',
-        Num2 => '2',
-        Num3 => '3',
-        Num4 => '4',
-        Num5 => '5',
-        Num6 => '6',
-        Num7 => '7',
-        Num8 => '8',
-        Num9 => '9',
-        A => 'A',
-        B => 'B',
-        C => 'C',
-        D => 'D',
-        E => 'E',
-        F => 'F',
-        _ => return None,
-    })
+    /// Arrow key presses this frame (key-repeats included)
+    pub(crate) arrow_keys_pressed: Vec<egui::Key>,
 }
 
 /// Collect events once per frame from an `egui::Ui` reference and return an aggregated state.
 /// **Note**: currently unused; might be useful in the future.
 #[allow(dead_code)]
 pub fn collect_ui_events(ui: &egui::Ui) -> EventState {
-    ui.input(collect_inner)
+    let text_edit_focused = ui.ctx().text_edit_focused();
+    ui.input(|i| collect_inner(i, text_edit_focused))
 }
 
 /// Collect events once per frame from an `egui::Context` reference and return an aggregated state.
 pub fn collect_ui_events_ctx(ctx: &egui::Context) -> EventState {
-    ctx.input(collect_inner)
+    let text_edit_focused = ctx.text_edit_focused();
+    ctx.input(|i| collect_inner(i, text_edit_focused))
 }
 
-fn collect_inner(i: &egui::InputState) -> EventState {
+fn collect_inner(i: &egui::InputState, text_edit_focused: bool) -> EventState {
     let mut state = EventState {
         pointer_state: PointerState {
             pointer_hover: i.pointer.hover_pos(),
@@ -64,39 +42,46 @@ fn collect_inner(i: &egui::InputState) -> EventState {
         ..Default::default()
     };
 
-    // Key press events (only consider key releases)
     for event in &i.events {
-        if let egui::Event::Key {
-            key,
-            pressed: false,
-            modifiers,
-            ..
-        } = event
-        {
-            state.last_key_released = Some(*key);
-
-            // Store Enter key release directly
-            if state.last_key_released == Some(egui::Key::Enter) {
-                state.enter_released = true;
+        match event {
+            // Take hex chars from text input (not raw keys), so that shortcuts like
+            // Cmd+C never count as typing, even if Cmd is released before C
+            egui::Event::Text(text) => {
+                state
+                    .hex_chars
+                    .extend(text.chars().filter(char::is_ascii_hexdigit));
             }
-
-            // Store arrow keys release directly
-            if matches!(
-                *key,
-                egui::Key::ArrowLeft
+            // Arrow key presses (key-repeats included, so holding a key keeps moving).
+            // Skipped while a text field has focus (arrows move its text cursor there)
+            // and when combined with Cmd / Ctrl / Alt (reserved for shortcuts).
+            egui::Event::Key {
+                key:
+                    key @ (egui::Key::ArrowLeft
                     | egui::Key::ArrowRight
                     | egui::Key::ArrowUp
-                    | egui::Key::ArrowDown
-            ) {
-                state.arrow_key_released = Some(*key);
+                    | egui::Key::ArrowDown),
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if !text_edit_focused && !modifiers.command && !modifiers.ctrl && !modifiers.alt {
+                    state.arrow_keys_pressed.push(*key);
+                }
             }
+            // Key release events
+            egui::Event::Key {
+                key,
+                pressed: false,
+                ..
+            } => {
+                state.last_key_released = Some(*key);
 
-            if !modifiers.command
-                && !modifiers.alt
-                && let Some(ch) = key_to_hex_char(*key)
-            {
-                state.hex_chars_released.push(ch);
+                // Store Enter key release directly
+                if state.last_key_released == Some(egui::Key::Enter) {
+                    state.enter_released = true;
+                }
             }
+            _ => {}
         }
     }
 

@@ -1,5 +1,6 @@
 use crate::app::HexSession;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 #[derive(Default)]
 pub struct ByteEdit {
@@ -59,25 +60,19 @@ impl HexSession {
             return;
         }
 
+        // If other bytes got selected mid-edit - clear the pending edit
+        if self.editor.in_progress && self.editor.addr != self.selection.range {
+            self.editor.clear();
+        }
+
         for &ch in typed_chars {
-            if self.selection.range.is_some() && self.selection.released && !self.editor.in_progress
-            {
-                // Start editing if user types a hex char
-                if ch.is_ascii_hexdigit() {
-                    self.editor.in_progress = true;
-                    self.editor.addr = self.selection.range;
-                    self.editor.buffer = ch.to_ascii_uppercase().to_string();
-                }
-            } else if self.editor.in_progress {
-                // If other bytes got selected - clear and return
-                if self.editor.addr != self.selection.range {
-                    self.editor.clear();
-                }
+            // Allow only hex chars
+            if !ch.is_ascii_hexdigit() {
+                continue;
+            }
 
-                self.editor.buffer.insert(1, ch);
-
-                // Allow only hex chars
-                self.editor.buffer.retain(|c| c.is_ascii_hexdigit());
+            if self.editor.in_progress {
+                self.editor.buffer.push(ch.to_ascii_uppercase());
 
                 // When two hex chars are entered - commit automatically
                 if self.editor.buffer.len() == 2 {
@@ -88,17 +83,23 @@ impl HexSession {
                         let s = start.min(end);
                         let e = start.max(end);
 
-                        // Update the bytes in the map. If the byte is actually changed -
-                        // insert its address into Vec that tracks modified bytes.
+                        // Update the bytes. Track the original value of each changed byte,
+                        // and stop tracking it once it is set back to that original value.
                         for addr in s..=e {
-                            let prev_value = self.ih.read_byte(addr);
-                            if self.ih.update_byte(addr, value).ok() == Some(())
-                                && let Some(prev) = prev_value
-                                && value != prev
-                            {
-                                self.editor.modified.entry(addr).or_insert(prev);
+                            let Some(prev) = self.set_byte(addr, value) else {
+                                continue;
+                            };
+                            match self.editor.modified.entry(addr) {
+                                Entry::Occupied(orig) if *orig.get() == value => {
+                                    orig.remove();
+                                }
+                                Entry::Occupied(_) => {}
+                                Entry::Vacant(orig) => {
+                                    orig.insert(prev);
+                                }
                             }
                         }
+                        self.clear_marks_if_saved();
 
                         // If there are search results - redo it
                         if !self.search.results.is_empty() {
@@ -107,17 +108,31 @@ impl HexSession {
                     }
                     self.editor.clear();
                 }
+            } else if self.selection.range.is_some() && self.selection.released {
+                // Start editing if there is a finished selection
+                self.editor.in_progress = true;
+                self.editor.addr = self.selection.range;
+                self.editor.buffer = ch.to_ascii_uppercase().to_string();
             }
         }
     }
 
+    /// Write `value` to the byte at `addr` and update the data fingerprint.
+    /// Returns the previous value if the byte exists and was actually changed.
+    fn set_byte(&mut self, addr: usize, value: u8) -> Option<u8> {
+        let prev = self.ih.read_byte(addr)?;
+        if prev == value || self.ih.update_byte(addr, value).is_err() {
+            return None;
+        }
+        self.fingerprint.byte_changed(addr, prev, value);
+        Some(prev)
+    }
+
     /// Restore all modified bytes to their original values
     pub(crate) fn restore(&mut self) {
-        for (&addr, &orig_value) in &self.editor.modified {
-            let _ = self.ih.update_byte(addr, orig_value);
+        for (addr, orig_value) in std::mem::take(&mut self.editor.modified) {
+            self.set_byte(addr, orig_value);
         }
-
-        self.editor.modified.clear();
 
         if !self.search.results.is_empty() {
             self.search.redo();

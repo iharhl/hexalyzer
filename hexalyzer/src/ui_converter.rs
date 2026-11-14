@@ -18,6 +18,9 @@ enum Endian {
     Little,
 }
 
+// TODO: make it a standalone window that can go outside bounds
+//       and indicates that it is in focus
+
 /// Standalone hex/dec/bin/ascii converter tool window
 #[derive(Default)]
 pub struct HexConverter {
@@ -28,13 +31,13 @@ pub struct HexConverter {
     ascii: String,
     endian: Endian,
     signed: bool,
-    /// Whether the converter window or its widgets had focus this frame
+    /// Whether the last click landed in the converter window. Stays set until the user
+    /// clicks elsewhere, so keys typed into the converter never reach the main view.
     focused: bool,
 }
 
 impl HexConverter {
-    /// Returns true if the converter window was hovered or had keyboard focus
-    /// during the last `show()` call
+    /// Returns true if the last click landed in the converter window
     pub const fn has_focus(&self) -> bool {
         self.focused
     }
@@ -60,7 +63,20 @@ impl HexConverter {
                     });
             });
         self.active = is_open;
-        self.focused = response.is_some_and(|r| r.response.hovered() || r.response.has_focus());
+
+        // Focus follows the last click: inside the window -> converter, elsewhere -> main app
+        if let Some(press_pos) = ctx.input(|i| {
+            i.pointer
+                .any_pressed()
+                .then(|| i.pointer.press_origin())
+                .flatten()
+        }) {
+            self.focused =
+                response.is_some_and(|r| ctx.layer_id_at(press_pos) == Some(r.response.layer_id));
+        }
+        if !self.active {
+            self.focused = false;
+        }
     }
 
     fn show_contents(&mut self, ui: &mut egui::Ui) {

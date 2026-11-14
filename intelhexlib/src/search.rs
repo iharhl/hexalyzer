@@ -8,6 +8,7 @@ pub enum SearchType {
 }
 
 /// Searches for a pattern in the hex data.
+/// Returns start addresses of matches, sorted in ascending order.
 pub fn search<'a>(
     iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
     search_type: &SearchType,
