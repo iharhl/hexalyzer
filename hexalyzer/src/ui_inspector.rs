@@ -24,47 +24,46 @@ pub fn format_with_separators<T: ToString>(n: T) -> String {
     format!("{sign}{result}")
 }
 
+/// Format the float as the shortest decimal that reads back as the same value in its
+/// own type.
+fn format_float_shortest<T>(float_value: T, sci_above: f64, sci_below: f64) -> String
+where
+    T: Copy + Into<f64> + std::fmt::Display + std::fmt::LowerExp,
+{
+    let f: f64 = float_value.into();
+    if f.abs() >= sci_above || (f != 0.0 && f.abs() < sci_below) {
+        format!("{float_value:e}")
+    } else {
+        format!("{float_value}")
+    }
+}
+
 /// Format float for clipboard: no commas or thousands separators.
 /// Uses scientific notation for extreme values.
-fn format_float_plain<T: Into<f64>>(float_value: T) -> String {
-    let f = float_value.into();
-    let formatted = if f.abs() >= 1e8 || (f != 0.0 && f.abs() < 1e-7) {
-        format!("{f:.17e}")
-    } else {
-        format!("{f:.17}")
-    };
-    formatted
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+fn format_float_plain<T>(float_value: T) -> String
+where
+    T: Copy + Into<f64> + std::fmt::Display + std::fmt::LowerExp,
+{
+    format_float_shortest(float_value, 1e8, 1e-7)
 }
 
 /// Format the float for inspector view
-fn format_float<T: Into<f64>>(float_value: T) -> String {
-    let f = float_value.into();
+fn format_float<T>(float_value: T) -> String
+where
+    T: Copy + Into<f64> + std::fmt::Display + std::fmt::LowerExp,
+{
+    let formatted = format_float_shortest(float_value, 1e6, 1e-5);
 
-    // Decide between normal or scientific notation
-    let formatted = if f.abs() >= 1e6 || (f != 0.0 && f.abs() < 1e-5) {
-        format!("{f:.17e}") // scientific notation
-    } else {
-        format!("{f:.17}") // fixed decimal format
-    };
-
-    // Trim trailing zeros and possible trailing decimal point
-    let trimmed = formatted
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string();
-
-    // Split into integer + fractional parts
-    let mut parts = trimmed.split('.');
-    let int_part = parts.next().unwrap_or("0");
-    let frac_part = parts.next().unwrap_or("");
-
-    if frac_part.is_empty() {
-        return format_with_separators(int_part);
+    // Scientific notation: nothing to separate
+    if formatted.contains('e') {
+        return formatted;
     }
-    format!("{}.{}", format_with_separators(int_part), frac_part)
+
+    // Add thousands separators to the integer part
+    match formatted.split_once('.') {
+        Some((int_part, frac_part)) => format!("{}.{frac_part}", format_with_separators(int_part)),
+        None => format_with_separators(formatted),
+    }
 }
 
 /// Format the unix timestamp (seconds since epoch) as a UTC string.
@@ -452,5 +451,83 @@ mod tests {
         );
         assert_eq!(format_unix_timestamp(-62_135_596_801), None);
         assert_eq!(format_unix_timestamp(253_402_300_801), None);
+    }
+
+    #[test]
+    fn test_format_float_scientific() {
+        // Exponents ending in 0 must not be trimmed
+        assert_eq!(format_float(1e10_f64), "1e10");
+        assert_eq!(format_float(2e20_f64), "2e20");
+        assert_eq!(format_float(1e-10_f64), "1e-10");
+        // No padding zeros in the mantissa
+        assert_eq!(format_float(1.5e7_f64), "1.5e7");
+        assert_eq!(format_float(-3.25e-20_f64), "-3.25e-20");
+        assert_eq!(format_float(f64::MAX), "1.7976931348623157e308");
+        assert_eq!(format_float(f64::MIN_POSITIVE), "2.2250738585072014e-308");
+        // f32 is formatted at f32 precision
+        assert_eq!(format_float(1e10_f32), "1e10");
+        assert_eq!(format_float(f32::MAX), "3.4028235e38");
+        assert_eq!(format_float(16_777_216_f32), "1.6777216e7");
+    }
+
+    #[test]
+    fn test_format_float_fixed() {
+        assert_eq!(format_float(0.0_f64), "0");
+        assert_eq!(format_float(-0.0_f64), "-0");
+        assert_eq!(format_float(42.0_f64), "42");
+        // No binary noise from fixed precision
+        assert_eq!(format_float(0.1_f64), "0.1");
+        assert_eq!(format_float(0.1_f32), "0.1");
+        // Thousands separators on the integer part only
+        assert_eq!(format_float(123_456.789_f64), "123,456.789");
+        assert_eq!(format_float(-1234.5_f64), "-1,234.5");
+        assert_eq!(format_float(123_456.79_f32), "123,456.79");
+    }
+
+    #[test]
+    fn test_format_float_thresholds() {
+        // Display: scientific at |f| >= 1e6 or 0 < |f| < 1e-5
+        assert_eq!(format_float(999_999.5_f64), "999,999.5");
+        assert_eq!(format_float(1e6_f64), "1e6");
+        assert_eq!(format_float(1e-5_f64), "0.00001");
+        assert_eq!(format_float(9e-6_f64), "9e-6");
+        // Clipboard: scientific at |f| >= 1e8 or 0 < |f| < 1e-7
+        assert_eq!(format_float_plain(12_345_678.5_f64), "12345678.5");
+        assert_eq!(format_float_plain(1e8_f64), "1e8");
+        assert_eq!(format_float_plain(1e-7_f64), "0.0000001");
+        assert_eq!(format_float_plain(1e-8_f64), "1e-8");
+    }
+
+    #[test]
+    fn test_format_float_special_values() {
+        assert_eq!(format_float(f64::NAN), "NaN");
+        assert_eq!(format_float(f64::INFINITY), "inf");
+        assert_eq!(format_float(f64::NEG_INFINITY), "-inf");
+        assert_eq!(format_float_plain(f32::NAN), "NaN");
+        assert_eq!(format_float_plain(f32::INFINITY), "inf");
+    }
+
+    #[test]
+    fn test_format_float_plain_roundtrip() {
+        // The copied value must parse back to the exact same bits.
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+
+            let f = f64::from_bits(x);
+            if f.is_finite() {
+                let back: f64 = format_float_plain(f).parse().unwrap_or(f64::NAN);
+                assert_eq!(back.to_bits(), f.to_bits(), "f64 {f:e}");
+            }
+
+            #[allow(clippy::cast_possible_truncation)]
+            let g = f32::from_bits(x as u32);
+            if g.is_finite() {
+                let back: f32 = format_float_plain(g).parse().unwrap_or(f32::NAN);
+                assert_eq!(back.to_bits(), g.to_bits(), "f32 {g:e}");
+            }
+        }
     }
 }
