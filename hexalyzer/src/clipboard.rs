@@ -18,57 +18,22 @@ impl HexViewerApp {
         }
 
         let (copy_hex, copy_ascii, copy_addr) = ctx.input_mut(|i| {
-            let mut hex = false;
-            let mut ascii = false;
-            let mut addr = false;
+            // egui-winit translates plain Cmd+C (and the platform copy keys) into
+            // `Event::Copy` without a key event. Consume it so it does not reach
+            // any widget later this frame.
+            let hex = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
+            i.events.retain(|e| !matches!(e, egui::Event::Copy));
 
-            // Check if the OS generated native Copy event
-            let has_copy_event = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
-
-            if has_copy_event {
-                // Look at the modifier keys active right now
-                if i.modifiers.command && i.modifiers.shift {
-                    ascii = true;
-                } else if i.modifiers.command {
-                    hex = true;
-                }
-
-                // Consume the copy event so it isn't forwarded to focused text inputs
-                i.events.retain(|e| !matches!(e, egui::Event::Copy));
-            }
-
-            // Fallback: Catch raw key presses if the OS didn't detect it as Event::Copy
-            if !hex && !ascii && !addr {
-                let has_key = i.events.iter().any(|e| {
-                    matches!(
-                        e,
-                        egui::Event::Key {
-                            key: egui::Key::C,
-                            pressed: true,
-                            ..
-                        }
-                    )
-                });
-                if has_key {
-                    if i.modifiers.alt {
-                        addr = true;
-                    } else if i.modifiers.command && i.modifiers.shift {
-                        ascii = true;
-                    } else if i.modifiers.command {
-                        hex = true;
-                    }
-                    // Clear the key press event
-                    i.events.retain(|e| {
-                        !matches!(
-                            e,
-                            egui::Event::Key {
-                                key: egui::Key::C,
-                                ..
-                            }
-                        )
-                    });
-                }
-            }
+            // Shortcuts with Shift / Alt are not copy commands for egui-winit, so they
+            // arrive as ordinary key presses
+            let addr = i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::ALT,
+                egui::Key::C,
+            ));
+            let ascii = i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::C,
+            ));
 
             (hex, ascii, addr)
         });
