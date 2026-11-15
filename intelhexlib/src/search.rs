@@ -39,9 +39,10 @@ pub fn search_regex<'a>(
     pattern: &str,
 ) -> Result<Vec<usize>, IntelHexErrorKind> {
     // Unicode mode off: the data is raw bytes, so `\xFF` matches the byte 0xFF (not the
-    // UTF-8 encoding of U+00FF) and `.` matches any byte
+    // UTF-8 encoding of U+00FF). The `.` matches any byte, including 0x0A (newline).
     let re = RegexBuilder::new(pattern)
         .unicode(false)
+        .dot_matches_new_line(true)
         .build()
         .map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
 
@@ -150,5 +151,17 @@ mod tests {
 
         // Assert: only non-empty matches, no hit at every byte
         assert_eq!(res, Ok(vec![0x12, 0x16]));
+    }
+
+    #[test]
+    fn test_search_regex_dot_matches_newline() {
+        // Arrange
+        let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(0x10, b"xa\nb".to_vec())]);
+
+        // Act
+        let res = search_regex(map.iter(), "a.b");
+
+        // Assert
+        assert_eq!(res, Ok(vec![0x11]));
     }
 }
