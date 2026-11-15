@@ -66,18 +66,6 @@ impl HexViewerApp {
     pub(crate) fn show_tabs(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("tabs_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
-                // Sidebar toggle button
-                let icon = if self.side_panel_expanded { "<<" } else { ">>" };
-                let (response, ()) =
-                    ui_button::tab_style_button(ui, "sidebar_toggle", false, 0.0, |ui| {
-                        ui.label(icon);
-                    });
-                if response.on_hover_text("Toggle Sidebar").clicked() {
-                    self.side_panel_expanded = !self.side_panel_expanded;
-                }
-
-                ui.separator();
-
                 let mut tab_to_close = None;
 
                 // Modify spacing between tabs
