@@ -8,13 +8,89 @@
 
 use crate::error::{IntelHexError, IntelHexErrorKind};
 use crate::record::{Record, RecordType};
-use crate::search::{SearchType, search};
+use crate::search;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// UTF-8 byte order mark. Some editors (e.g. Notepad) put it at the start of text files.
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// Counter that makes temporary file names unique within the process
+static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Write a file atomically (fully written or not changed at all).
+///
+/// The content is written to a temporary file next to the target, flushed and synced
+/// to disk, and only then renamed over the target. If anything fails (e.g. disk full),
+/// the temporary file is removed and an existing target is left untouched.
+///
+/// - Creates missing parent directories.
+/// - If the target is a symlink, the file it points to is replaced (the link is kept).
+/// - If the target exists, it must be writable, and its permissions are kept.
+fn write_file_atomically(
+    filepath: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), IntelHexError>,
+) -> Result<(), IntelHexError> {
+    // Ensure the parent directory exists
+    if let Some(parent) = filepath.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Resolve symlinks, so the link itself is not replaced by a regular file
+    let target = std::fs::canonicalize(filepath).unwrap_or_else(|_| filepath.to_path_buf());
+
+    // An existing target must be writable
+    let permissions = if target.exists() {
+        let file = OpenOptions::new().write(true).open(&target)?;
+        Some(file.metadata()?.permissions())
+    } else {
+        None
+    };
+
+    // Create temporary file in the same directory
+    let file_name = target.file_name().unwrap_or_default().to_string_lossy();
+    let temp_path = target.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let result = (|| {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        let mut writer = BufWriter::new(file);
+
+        write(&mut writer)?;
+
+        // Flush explicitly (dropping `BufWriter` silently discards write errors)
+        let file = writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
+
+        // Make sure the data is on disk before it replaces the target
+        file.sync_all()?;
+        drop(file);
+
+        std::fs::rename(&temp_path, &target)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    result
+}
 
 #[derive(Debug, Clone)]
 pub struct IntelHex {
@@ -244,14 +320,18 @@ impl IntelHex {
     #[allow(clippy::too_many_lines)]
     /// Parse the raw contents of the hex file and fill internal buffer.
     ///
+    /// Parsing stops at the first end-of-file record, anything after it is ignored.
+    ///
     /// # Errors
     /// - Returns an error if the record is corrupted
     /// - Returns an error if there is an issue during filling the internal buffer
+    /// - Returns an error if there is no end-of-file record
     ///
     fn parse(&mut self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
-        let mut count: usize = 0;
-
         let raw_bytes = raw_bytes.strip_prefix(UTF8_BOM).unwrap_or(raw_bytes);
+
+        // Line number of the last record seen (reported if the EOF record is missing)
+        let mut last_line_no = 0;
 
         // Iterate over lines of records
         for (idx, line) in raw_bytes.split(|&b| b == b'\n').enumerate() {
@@ -262,10 +342,11 @@ impl IntelHex {
                 continue;
             }
 
-            count = idx + 1;
+            let line_no = idx + 1;
+            last_line_no = line_no;
 
             let record =
-                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, count))?;
+                Record::parse(line).map_err(|err| IntelHexError::ParseRecordError(err, line_no))?;
 
             // Fill in self
             match record.rtype {
@@ -275,12 +356,20 @@ impl IntelHex {
                     if !record.data.is_empty() {
                         let new_end_addr = addr + record.data.len();
 
+                        // Limit the address range to u32::MAX
+                        if new_end_addr - 1 > u32::MAX as usize {
+                            return Err(IntelHexError::ParseRecordError(
+                                IntelHexErrorKind::AddressRangeOverflow,
+                                line_no,
+                            ));
+                        }
+
                         // Check for overlaps
                         self.check_no_overlap(addr, new_end_addr)
                             .map_err(|overlap_addr| {
                                 IntelHexError::ParseRecordError(
                                     IntelHexErrorKind::RecordAddressOverlap(overlap_addr),
-                                    count,
+                                    line_no,
                                 )
                             })?;
 
@@ -288,7 +377,9 @@ impl IntelHex {
                         self.insert_chunk_with_merge(addr, record.data);
                     }
                 }
-                RecordType::EndOfFile => {}
+                // EOF record must be the last record. Anything after it is ignored,
+                // tolerating trailing junk some tools append (e.g. SUB / NUL padding).
+                RecordType::EndOfFile => return Ok(()),
                 RecordType::ExtendedSegmentAddress => {
                     self.offset = (record.data[0] as usize * 256 + record.data[1] as usize) * 16;
                 }
@@ -299,7 +390,7 @@ impl IntelHex {
                     if self.start_addr.is_some() {
                         return Err(IntelHexError::ParseRecordError(
                             IntelHexErrorKind::DuplicateStartAddress,
-                            count,
+                            line_no,
                         ));
                     }
 
@@ -316,18 +407,11 @@ impl IntelHex {
             }
         }
 
-        // For now, limit the address range to u32 limit.
-        // Check at the end to not hinder the parsing performance.
-        if let Some(max_addr) = self.get_max_addr()
-            && max_addr > u32::MAX as usize
-        {
-            return Err(IntelHexError::ParseRecordError(
-                IntelHexErrorKind::AddressRangeOverflow,
-                count,
-            ));
-        }
-
-        Ok(())
+        // Reached the end without an EOF record
+        Err(IntelHexError::ParseRecordError(
+            IntelHexErrorKind::MissingEndOfFile,
+            last_line_no,
+        ))
     }
 
     /// Creates an `IntelHex` instance and fills it with data from the provided hex file.
@@ -410,6 +494,7 @@ impl IntelHex {
     ///
     /// # Errors
     /// Returns an error if the file cannot be read or parsed.
+    /// Returns an error if the data extends beyond the 32-bit address range.
     ///
     /// # Example
     /// ```
@@ -433,6 +518,7 @@ impl IntelHex {
     ///
     /// # Errors
     /// Returns an error if the file cannot be read or parsed.
+    /// Returns an error if the data extends beyond the 32-bit address range.
     ///
     /// # Example
     /// ```
@@ -452,6 +538,13 @@ impl IntelHex {
         // Read the contents of the file
         let data = std::fs::read(&filepath)?;
 
+        // Limit the address range to u32::MAX
+        if base_address > u32::MAX as usize || data.len() > u32::MAX as usize - base_address + 1 {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::AddressRangeOverflow,
+            ));
+        }
+
         // Clear provided IntelHex instance
         self.clear();
 
@@ -461,8 +554,10 @@ impl IntelHex {
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
-        // Load data bytes into the map as one chunk
-        self.buffer.insert(base_address, data);
+        // Load data bytes into the map as one chunk. Empty file holds no data.
+        if !data.is_empty() {
+            self.buffer.insert(base_address, data);
+        }
 
         Ok(())
     }
@@ -474,7 +569,9 @@ impl IntelHex {
     /// > Extended Linear Address (ELA) records are used instead.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be written.
+    /// Returns an error if the file cannot be written. The file is replaced only after
+    /// all data is written, so an existing file is left unchanged.
+    /// Returns an error if the data extends beyond the 32-bit address range
     ///
     /// # Example
     /// ```
@@ -486,84 +583,84 @@ impl IntelHex {
     /// assert_eq!(ih.size, 68);
     /// ```
     pub fn write_hex<P: AsRef<Path>>(&mut self, filepath: P) -> Result<(), IntelHexError> {
-        // Ensure the parent directory exists
-        if let Some(parent) = filepath.as_ref().parent() {
-            std::fs::create_dir_all(parent)?;
+        // Limit the address range to u32::MAX
+        if let Some(max_addr) = self.get_max_addr()
+            && max_addr > u32::MAX as usize
+        {
+            return Err(IntelHexError::CreateRecordError(
+                IntelHexErrorKind::AddressRangeOverflow,
+            ));
         }
 
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
+        // Write to a temporary file first, so a failed write keeps the original file intact
+        write_file_atomically(filepath.as_ref(), |writer| {
+            // Write start address record (raw bytes + newline)
+            if let Some(s) = self.start_addr {
+                writer.write_all(b":")?;
+                writer.write_all(&s)?;
+                writeln!(writer)?;
+            }
 
-        // Wrap in BufWriter for efficient line-by-line writing
-        let mut writer = std::io::BufWriter::new(file);
+            let mut cur_high_addr = 0u16;
 
-        // Write start address record (raw bytes + newline)
-        if let Some(s) = self.start_addr {
-            writer.write_all(b":")?;
-            writer.write_all(&s)?;
-            writeln!(writer)?;
-        }
+            for (&chunk_start, data) in &self.buffer {
+                let mut chunk_offset = 0;
 
-        let mut cur_high_addr = 0u16;
+                // Iterate over data chunk
+                while chunk_offset < data.len() {
+                    let addr = chunk_start + chunk_offset;
 
-        for (&chunk_start, data) in &self.buffer {
-            let mut chunk_offset = 0;
+                    // Split address into low and high
+                    let high_addr = (addr >> 16) as u16;
+                    let low_addr = (addr & 0xFFFF) as u16;
 
-            // Iterate over data chunk
-            while chunk_offset < data.len() {
-                let addr = chunk_start + chunk_offset;
+                    // If ELA segment changed -> emit ELA record
+                    if cur_high_addr != high_addr {
+                        let msb = (high_addr >> 8) as u8;
+                        let lsb = (high_addr & 0xFF) as u8;
 
-                // Split address into low and high
-                let high_addr = (addr >> 16) as u16;
-                let low_addr = (addr & 0xFFFF) as u16;
+                        let record =
+                            Record::create(0, RecordType::ExtendedLinearAddress, &[msb, lsb])?;
 
-                // If ELA segment changed -> emit ELA record
-                if cur_high_addr != high_addr {
-                    let msb = (high_addr >> 8) as u8;
-                    let lsb = (high_addr & 0xFF) as u8;
+                        writeln!(writer, "{record}")?;
 
-                    let record = Record::create(0, RecordType::ExtendedLinearAddress, &[msb, lsb])?;
+                        cur_high_addr = high_addr;
+                    }
 
+                    // Determine how many bytes can fit in this record
+                    // - Can't exceed max_payload_size
+                    // - Can't cross a 64KB boundary (must stay within current high_addr)
+                    let remaining_in_segment = 0x10000 - low_addr as usize;
+                    let chunk_size = std::cmp::min(
+                        self.max_payload_size,
+                        std::cmp::min(data.len() - chunk_offset, remaining_in_segment),
+                    );
+
+                    let record = Record::create(
+                        low_addr,
+                        RecordType::Data,
+                        &data[chunk_offset..chunk_offset + chunk_size],
+                    )?;
                     writeln!(writer, "{record}")?;
 
-                    cur_high_addr = high_addr;
+                    chunk_offset += chunk_size;
                 }
-
-                // Determine how many bytes can fit in this record
-                // - Can't exceed max_payload_size
-                // - Can't cross a 64KB boundary (must stay within current high_addr)
-                let remaining_in_segment = 0x10000 - low_addr as usize;
-                let chunk_size = std::cmp::min(
-                    self.max_payload_size,
-                    std::cmp::min(data.len() - chunk_offset, remaining_in_segment),
-                );
-
-                let record = Record::create(
-                    low_addr,
-                    RecordType::Data,
-                    &data[chunk_offset..chunk_offset + chunk_size],
-                )?;
-                writeln!(writer, "{record}")?;
-
-                chunk_offset += chunk_size;
             }
-        }
 
-        // Write EOF record
-        let record = Record::create(0, RecordType::EndOfFile, &[])?;
-        write!(writer, "{record}")?; // write last line (no newline)
+            // Write EOF record
+            let record = Record::create(0, RecordType::EndOfFile, &[])?;
+            write!(writer, "{record}")?; // write last line (no newline)
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Generates a binary file at the specified path.
     /// Address gaps are filled with the provided `gap_fill` byte (usually 0x00 or 0xFF).
     ///
     /// # Errors
-    /// Returns an error if the file cannot be written.
+    /// Returns an error if the file cannot be written. The file is replaced only after
+    /// all data is written, so an existing file is left unchanged.
     ///
     /// # Example
     /// ```
@@ -581,50 +678,38 @@ impl IntelHex {
         filepath: P,
         gap_fill: u8,
     ) -> Result<(), IntelHexError> {
-        // Ensure the parent directory exists
-        if let Some(parent) = filepath.as_ref().parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // Write to a temporary file first, so a failed write keeps the original file intact
+        write_file_atomically(filepath.as_ref(), |writer| {
+            // Get the starting point
+            let mut cur_addr = self.get_min_addr().unwrap_or(0);
 
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
+            // Iterate over contiguous chunks of data
+            for (&chunk_start, chunk_data) in &self.buffer {
+                // Fill the gap between the last written byte and the start of this chunk
+                if chunk_start > cur_addr {
+                    let gap_size = chunk_start - cur_addr;
 
-        // Wrap in BufWriter for efficient line-by-line writing
-        let mut writer = std::io::BufWriter::new(file);
+                    // Use a small buffer to write gaps. Limit the buffer to 4096 KB as it is the
+                    // default / typical page size of most OS - more efficient + avoids large heap allocations.
+                    let gap_buf = vec![gap_fill; std::cmp::min(gap_size, 4096)];
 
-        // Get the starting point
-        let mut cur_addr = self.get_min_addr().unwrap_or(0);
-
-        // Iterate over contiguous chunks of data
-        for (&chunk_start, chunk_data) in &self.buffer {
-            // Fill the gap between the last written byte and the start of this chunk
-            if chunk_start > cur_addr {
-                let gap_size = chunk_start - cur_addr;
-
-                // Use a small buffer to write gaps. Limit the buffer to 4096 KB as it is the
-                // default / typical page size of most OS - more efficient + avoids large heap allocations.
-                let gap_buf = vec![gap_fill; std::cmp::min(gap_size, 4096)];
-
-                let mut remaining = gap_size;
-                while remaining > 0 {
-                    let to_write = std::cmp::min(remaining, gap_buf.len());
-                    writer.write_all(&gap_buf[..to_write])?;
-                    remaining -= to_write;
+                    let mut remaining = gap_size;
+                    while remaining > 0 {
+                        let to_write = std::cmp::min(remaining, gap_buf.len());
+                        writer.write_all(&gap_buf[..to_write])?;
+                        remaining -= to_write;
+                    }
                 }
+
+                // Write the entire contiguous chunk at once
+                writer.write_all(chunk_data)?;
+
+                // Advance the tracking address
+                cur_addr = chunk_start + chunk_data.len();
             }
 
-            // Write the entire contiguous chunk at once
-            writer.write_all(chunk_data)?;
-
-            // Advance the tracking address
-            cur_addr = chunk_start + chunk_data.len();
-        }
-
-        writer.flush()?;
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Get an iterator over (address, contiguous data chunk) pairs in the
@@ -769,7 +854,7 @@ impl IntelHex {
     pub fn read_range(&self, start_addr: usize, len: usize) -> Option<Vec<u8>> {
         // Find the chunk that might contain the start_addr
         if let Some((&chunk_start, chunk_data)) = self.buffer.range(..=start_addr).next_back() {
-            let end_addr = start_addr + len;
+            let end_addr = start_addr.checked_add(len)?;
             let chunk_end = chunk_start + chunk_data.len();
 
             // Check if the entire requested range is within this chunk
@@ -788,6 +873,9 @@ impl IntelHex {
     ///
     /// For a non-allocating alternative, see [`iter_range`](Self::iter_range).
     ///
+    /// The range is clamped to the end of the address space (`usize::MAX`), so in case of
+    /// an overflow fewer than `len` elements will be returned.
+    ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
@@ -799,8 +887,8 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn read_range_safe(&self, start_addr: usize, len: usize) -> Vec<Option<u8>> {
-        let mut result = Vec::with_capacity(len);
-        let end_addr = start_addr + len;
+        let end_addr = start_addr.saturating_add(len);
+        let mut result = Vec::with_capacity(end_addr - start_addr);
         let mut cur_addr = start_addr;
 
         while cur_addr < end_addr {
@@ -853,6 +941,9 @@ impl IntelHex {
     /// This is the iterator equivalent of [`read_range_safe`] which avoids heap
     /// allocation.
     ///
+    /// The range is clamped to the end of the address space (`usize::MAX`), so in case of
+    /// an overflow fewer than `len` elements will be yielded.
+    ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
@@ -867,7 +958,7 @@ impl IntelHex {
         IterRange {
             buffer: &self.buffer,
             cur_addr: start_addr,
-            end_addr: start_addr + len,
+            end_addr: start_addr.saturating_add(len),
             current_chunk: None,
         }
     }
@@ -1002,9 +1093,9 @@ impl IntelHex {
     /// ```
     pub fn write_range(&mut self, start_addr: usize, end_addr: usize) -> Result<(), IntelHexError> {
         if start_addr > end_addr {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(start_addr),
-            ));
+            return Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                start_addr, end_addr,
+            )));
         }
 
         if end_addr > u32::MAX as usize {
@@ -1057,22 +1148,16 @@ impl IntelHex {
         end_addr: usize,
     ) -> Result<(), IntelHexError> {
         if start_addr > end_addr {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(start_addr),
-            ));
+            return Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                start_addr, end_addr,
+            )));
         }
-
-        let remove_start = start_addr;
-        let remove_end = end_addr + 1; // exclusive
 
         // Collect keys of chunks that overlap with the removal range
         let affected_keys: Vec<usize> = self
             .buffer
             .range(..=end_addr)
-            .filter(|&(&chunk_start, chunk_data)| {
-                let chunk_end = chunk_start + chunk_data.len();
-                chunk_end > remove_start && chunk_start < remove_end
-            })
+            .filter(|&(&chunk_start, chunk_data)| chunk_start + chunk_data.len() > start_addr)
             .map(|(&k, _)| k)
             .collect();
 
@@ -1082,18 +1167,18 @@ impl IntelHex {
             let Some(chunk_data) = self.buffer.remove(&key) else {
                 continue;
             };
-            let chunk_end = key + chunk_data.len();
+            let chunk_last = key + chunk_data.len() - 1;
 
             // Left fragment: portion before the removal range
-            if key < remove_start {
-                let left_end = std::cmp::min(remove_start, chunk_end);
-                new_chunks.push((key, chunk_data[..left_end - key].to_vec()));
+            if key < start_addr {
+                new_chunks.push((key, chunk_data[..start_addr - key].to_vec()));
             }
 
-            // Right fragment: portion after the removal range
-            if chunk_end > remove_end {
-                let right_start = std::cmp::max(remove_end, key);
-                new_chunks.push((remove_end, chunk_data[right_start - key..].to_vec()));
+            // Right fragment: portion after the removal range.
+            // `end_addr < chunk_last` guarantees `end_addr + 1` does not overflow.
+            if chunk_last > end_addr {
+                let right_start = end_addr + 1;
+                new_chunks.push((right_start, chunk_data[right_start - key..].to_vec()));
             }
         }
 
@@ -1136,16 +1221,11 @@ impl IntelHex {
         Ok(())
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss
-    )]
     /// Relocate the entire data buffer to a new starting address.
     ///
     /// # Errors
-    /// Returns an error if the new starting address is out of bounds or
-    /// if the `IntelHex` instance has no data.
+    /// Returns an error if the relocated data would extend beyond the 32-bit address range.
+    /// Returns an error if the `IntelHex` instance has no data.
     ///
     /// # Example
     /// ```
@@ -1165,35 +1245,30 @@ impl IntelHex {
                     IntelHexErrorKind::IntelHexInstanceEmpty,
                 ))?;
 
-        // Cap start address to u32::MAX (to not break API for now)
-        if new_start_address > u32::MAX as usize {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(new_start_address),
-            ));
-        }
+        // The relocated data must end within the 32-bit address range
+        let max_allowed_start_address = (u32::MAX as usize).saturating_sub(max_addr - min_addr);
 
-        let offset = new_start_address as i64 - min_addr as i64;
-
-        if max_addr as i64 + offset > i64::from(u32::MAX) {
-            let max_allowed_start_address = u32::MAX - max_addr as u32 + min_addr as u32;
+        if new_start_address > max_allowed_start_address {
             return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RelocateAddressOverflow(max_allowed_start_address as usize),
+                IntelHexErrorKind::RelocateAddressOverflow(max_allowed_start_address),
             ));
         }
 
         self.buffer = std::mem::take(&mut self.buffer)
             .into_iter()
-            .map(|(addr, data)| ((addr as i64 + offset) as usize, data))
+            .map(|(addr, data)| (addr - min_addr + new_start_address, data))
             .collect();
 
         Ok(())
     }
 
     /// Merge another `IntelHex` instance into this one.
+    /// The merge is atomic: on error, this instance is left unchanged.
     ///
     /// # Errors
     /// Returns an error if any data chunks overlap.
-    /// Returns an error if both this and other `IntelHex` instance have start address record.
+    /// Returns an error if both this and other `IntelHex` instance have a start address
+    /// record and the records differ. Identical records are accepted.
     ///
     /// # Example
     /// ```
@@ -1208,62 +1283,38 @@ impl IntelHex {
     /// assert!(res.is_ok());
     /// ```
     pub fn merge_safe(&mut self, other: &Self) -> Result<(), IntelHexError> {
-        for (&chunk_start, chunk_data) in &other.buffer {
-            let end_addr = chunk_start + chunk_data.len();
+        // Validate everything first, so that on error this instance is left unchanged
 
-            // Check for overlaps
-            self.check_no_overlap(chunk_start, end_addr)
+        // Both files have a start address record, and they differ
+        if let (Some(own), Some(incoming)) = (self.start_addr, other.start_addr)
+            && own != incoming
+        {
+            return Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::DuplicateStartAddress,
+            ));
+        }
+
+        // Chunks of `other` never overlap each other, so checking each one against
+        // the current buffer is enough
+        for (&chunk_start, chunk_data) in &other.buffer {
+            self.check_no_overlap(chunk_start, chunk_start + chunk_data.len())
                 .map_err(|overlap_addr| {
                     IntelHexError::UpdateError(IntelHexErrorKind::RecordAddressOverlap(
                         overlap_addr,
                     ))
                 })?;
-
-            // Insert the chunk if no overlaps
-            self.buffer.insert(chunk_start, chunk_data.clone());
-            self.size += chunk_data.len();
         }
 
-        // If both files have a start address, return an error
-        if self.start_addr.is_some() && other.start_addr.is_some() {
-            return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::DuplicateStartAddress,
-            ));
+        // Insert chunks (cannot fail). Adjacent ones are merged.
+        for (&chunk_start, chunk_data) in &other.buffer {
+            self.insert_chunk_with_merge(chunk_start, chunk_data.clone());
+            self.size += chunk_data.len();
         }
 
         // Use the start address from the other file if we don't have one
         if self.start_addr.is_none() {
             self.start_addr = other.start_addr;
         }
-
-        // Go through the buffer and merge adjacent chunks (if any)
-
-        if self.buffer.len() < 2 {
-            return Ok(());
-        }
-
-        let mut new_buf = BTreeMap::<usize, Vec<u8>>::new();
-        let mut iter = std::mem::take(&mut self.buffer).into_iter();
-
-        if let Some((mut cur_start, mut cur_data)) = iter.next() {
-            let mut cur_end = cur_start + cur_data.len();
-
-            for (start, mut data) in iter {
-                if start == cur_end {
-                    cur_end += data.len();
-                    cur_data.append(&mut data);
-                } else {
-                    new_buf.insert(cur_start, cur_data);
-                    cur_start = start;
-                    cur_data = data;
-                    cur_end = cur_start + cur_data.len();
-                }
-            }
-
-            new_buf.insert(cur_start, cur_data);
-        }
-
-        self.buffer = new_buf;
 
         Ok(())
     }
@@ -1376,32 +1427,35 @@ impl IntelHex {
     /// ```
     #[must_use]
     pub fn search_bytes(&self, pattern: &[u8]) -> Vec<usize> {
-        search(self.iter(), &SearchType::Hex(pattern.to_vec()))
+        search::search_bytes(self.iter(), pattern)
     }
 
     /// Window slide search for an ASCII string in the `IntelHex` data.
     /// Returns start addresses of matches, sorted in ascending order.
     ///
-    /// If `regex` flag is set to true, the pattern is interpreted as a regular expression.
-    /// Otherwise, it is interpreted as a literal string.
+    /// If `regex` flag is set to true, the pattern is interpreted as a regular expression
+    /// (empty matches are skipped). Otherwise, it is interpreted as a literal string.
+    ///
+    /// # Errors
+    /// Returns an error if `regex` is set and `pattern` is not a valid regular expression.
     ///
     /// # Example
     /// ```
     /// use intelhexlib::IntelHex;
     ///
     /// let mut ih = IntelHex::from_hex("tests/fixtures/ih_valid_1.hex").unwrap();
-    /// let matches1: Vec<usize> = ih.search_ascii("Kf", false); // [0x4B, 0x66] in hex bytes
-    /// let matches2: Vec<usize> = ih.search_ascii(r"H\d{1}\w{1}", true); // H0Y in the hex file
+    /// let matches1 = ih.search_ascii("Kf", false).unwrap(); // [0x4B, 0x66] in hex bytes
+    /// let matches2 = ih.search_ascii(r"H\d{1}\w{1}", true).unwrap(); // H0Y in the hex file
     ///
     /// assert_eq!(matches1, vec![0x1C216]);
     /// assert_eq!(matches2, vec![0x1C237]);
+    /// assert!(ih.search_ascii("[", true).is_err());
     /// ```
-    #[must_use]
-    pub fn search_ascii(&self, pattern: &str, regex: bool) -> Vec<usize> {
+    pub fn search_ascii(&self, pattern: &str, regex: bool) -> Result<Vec<usize>, IntelHexError> {
         if regex {
-            search(self.iter(), &SearchType::Regex(pattern.to_string()))
+            search::search_regex(self.iter(), pattern).map_err(IntelHexError::SearchError)
         } else {
-            search(self.iter(), &SearchType::Ascii(pattern.to_string()))
+            Ok(search::search_bytes(self.iter(), pattern.as_bytes()))
         }
     }
 }
@@ -1889,16 +1943,31 @@ mod tests {
         ih.buffer.insert(0x0000, vec![0xFF]); // min addr
         ih.buffer.insert(0xFFFF, vec![0xFF]); // max addr
 
-        // Act
-        let res = ih.relocate(u32::MAX as usize);
+        let original = ih.buffer.clone();
 
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
-            ))
-        );
+        // Act & Assert - start addresses past the highest allowed one, incl. beyond 32-bit
+        for new_start in [
+            0xFFFF_0001,
+            u32::MAX as usize,
+            u32::MAX as usize + 1,
+            usize::MAX,
+        ] {
+            let res = ih.relocate(new_start);
+
+            assert_eq!(
+                res,
+                Err(IntelHexError::UpdateError(
+                    IntelHexErrorKind::RelocateAddressOverflow(0xFFFF_0000)
+                )),
+                "new start 0x{new_start:X}"
+            );
+            assert_eq!(ih.buffer, original, "new start 0x{new_start:X}");
+        }
+
+        // Act & Assert - the highest allowed start address puts the last byte at u32::MAX
+        assert!(ih.relocate(0xFFFF_0000).is_ok());
+        assert_eq!(ih.get_min_addr(), Some(0xFFFF_0000));
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
     }
 
     #[test]
@@ -1990,75 +2059,113 @@ mod tests {
 
     #[test]
     fn test_merge_safe_invalid() {
+        type Case = (
+            &'static str,          // case name
+            Vec<(usize, Vec<u8>)>, // chunks of the other file
+            Option<[u8; 18]>,      // start address record
+            IntelHexErrorKind,     // expected error
+        );
+
+        // :04000005112233444D
+        let start_addr_a = [
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ];
+        // :04000005556677883D
+        let start_addr_b = [
+            48, 52, 48, 48, 48, 48, 48, 53, 53, 53, 54, 54, 55, 55, 56, 56, 51, 68,
+        ];
+
         // Arrange
         let mut ih1 = IntelHex::new();
         ih1.buffer.insert(0x20, vec![0x0, 0x0, 0x0, 0x0]);
         ih1.size = 4;
-        ih1.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
+        ih1.start_addr = Some(start_addr_a);
+        let original = ih1.clone();
 
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x1E, vec![0x1, 0x1, 0x1]); // overlap from left side
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x20)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x22, vec![0x1]); // overlap within
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x22)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x23, vec![0x1, 0x1, 0x1]); // overlap from right side
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordAddressOverlap(0x23)
-            ))
-        );
-
-        // Arrange
-        let mut ih2 = IntelHex::new();
-        ih2.buffer.insert(0x80, vec![0x1, 0x1]); // no overlap
-        ih2.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
-
-        // Act
-        let res = ih1.merge_safe(&ih2);
-
-        // Assert
-        assert_eq!(
-            res,
-            Err(IntelHexError::UpdateError(
+        let cases: Vec<Case> = vec![
+            (
+                "overlap from left side",
+                vec![(0x1E, vec![0x1, 0x1, 0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x20),
+            ),
+            (
+                "overlap within",
+                vec![(0x22, vec![0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x22),
+            ),
+            (
+                "overlap from right side",
+                vec![(0x23, vec![0x1, 0x1, 0x1])],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x23),
+            ),
+            (
+                "valid chunks (incl. adjacent) before an overlapping one",
+                vec![
+                    (0x00, vec![0x1, 0x1]),
+                    (0x1E, vec![0x1, 0x1]),
+                    (0x23, vec![0x1]),
+                ],
+                None,
+                IntelHexErrorKind::RecordAddressOverlap(0x23),
+            ),
+            (
+                "different start address, adjacent chunks",
+                vec![(0x1E, vec![0x1, 0x1]), (0x24, vec![0x1, 0x1])],
+                Some(start_addr_b),
                 IntelHexErrorKind::DuplicateStartAddress,
-            ))
+            ),
+        ];
+
+        for (name, chunks, start_addr, expected) in cases {
+            let mut ih2 = IntelHex::new();
+            for (addr, data) in chunks {
+                ih2.size += data.len();
+                ih2.buffer.insert(addr, data);
+            }
+            ih2.start_addr = start_addr;
+
+            // Act
+            let res = ih1.merge_safe(&ih2);
+
+            // Assert - error is returned and `ih1` is left unchanged
+            assert_eq!(res, Err(IntelHexError::UpdateError(expected)), "{name}");
+            assert_eq!(ih1.buffer, original.buffer, "{name}");
+            assert_eq!(ih1.size, original.size, "{name}");
+            assert_eq!(ih1.start_addr, original.start_addr, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_merge_safe_identical_start_addr() {
+        // Arrange
+        let start_addr = Some([
+            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
+        ]); // :04000005112233444D
+
+        let mut ih1 = IntelHex::new();
+        ih1.buffer.insert(0x20, vec![0x0, 0x0]);
+        ih1.size = 2;
+        ih1.start_addr = start_addr;
+
+        let mut ih2 = IntelHex::new();
+        ih2.buffer.insert(0x22, vec![0x1, 0x1]);
+        ih2.size = 2;
+        ih2.start_addr = start_addr;
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(
+            ih1.buffer,
+            BTreeMap::from([(0x20, vec![0x0, 0x0, 0x1, 0x1])])
         );
+        assert_eq!(ih1.size, 4);
+        assert_eq!(ih1.start_addr, start_addr);
     }
 
     #[test]
@@ -2173,8 +2280,13 @@ mod tests {
         // Assert
         assert_eq!(
             res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(0x100F)
+            Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                0x100F, 0x1000
+            )))
+        );
+        assert!(
+            res.is_err_and(|e| e.to_string().ends_with(
+                "Invalid range: start address 0x100F is greater than end address 0x1000"
             ))
         );
 
@@ -2364,9 +2476,62 @@ mod tests {
         // Assert
         assert_eq!(
             res,
-            Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::InvalidAddress(0x100F)
-            ))
+            Err(IntelHexError::UpdateError(IntelHexErrorKind::InvalidRange(
+                0x100F, 0x1000
+            )))
+        );
+    }
+
+    #[test]
+    fn test_remove_range_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.buffer.insert(0x1000, vec![0x5, 0x6, 0x7, 0x8]);
+        ih.size = 8;
+
+        // Act & Assert - range starting past all data is a no-op
+        assert!(ih.remove_range(usize::MAX, usize::MAX).is_ok());
+        assert_eq!(ih.size, 8);
+
+        // Act & Assert - open-ended range trims the last chunk
+        assert!(ih.remove_range(0x1002, usize::MAX).is_ok());
+        assert_eq!(
+            ih.buffer,
+            BTreeMap::from([(0x0, vec![0x1, 0x2, 0x3, 0x4]), (0x1000, vec![0x5, 0x6])])
+        );
+        assert_eq!(ih.size, 6);
+
+        // Act & Assert - full address space removes everything
+        assert!(ih.remove_range(0, usize::MAX).is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+    }
+
+    #[test]
+    fn test_read_ops_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.size = 4;
+
+        // `read_range` - a range past the end of the address space is never fully backed
+        assert_eq!(ih.read_range(0x1000, usize::MAX), None);
+        assert_eq!(ih.read_range(0x1002, usize::MAX - 0x1000), None);
+
+        // `read_range_safe` - clamped to the end of the address space
+        assert_eq!(ih.read_range_safe(usize::MAX - 2, 10), vec![None, None]);
+        assert_eq!(ih.read_range_safe(usize::MAX, 1), vec![]);
+
+        // `iter_range` - clamped to the end of the address space
+        let iter = ih.iter_range(usize::MAX - 2, 10);
+        assert_eq!(iter.len(), 2);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!(
+            ih.iter_range(0x1002, usize::MAX)
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![Some(0x3), Some(0x4), None]
         );
     }
 
@@ -2444,6 +2609,283 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_address_range_limit() {
+        // Arrange: ELA 0xFFFF, then 8 bytes at 0xFFFFFFF8 (last byte at exactly u32::MAX)
+        let mut ih = IntelHex::new();
+        let raw = format!(":02000004FFFFFC\n:08FFF800000000000000000001\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
+    }
+
+    #[test]
+    fn test_parse_address_overflow_line() {
+        // Arrange: ELA 0xFFFF, then 16 bytes at 0xFFFFFFF8 on line 2 (crosses u32::MAX)
+        let mut ih = IntelHex::new();
+        let raw =
+            format!(":02000004FFFFFC\n:10FFF80000000000000000000000000000000000F9\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert: the offending record's line is reported and not the last line
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::AddressRangeOverflow,
+                2
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_ignores_content_after_eof() {
+        // Arrange: a valid record, a bad record and trailing junk after EOF
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_DATA_A}\n{REC_EOF}\n{REC_DATA_B}\n:0100010042BD\n\x1A\0\0");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.read_byte(0x0), Some(b'A'));
+        assert_eq!(ih.read_byte(0x1), None);
+    }
+
+    #[test]
+    fn test_parse_missing_eof() {
+        // Arrange: last record on line 3, no EOF record
+        let mut ih = IntelHex::new();
+        let raw = format!("{REC_DATA_A}\n\n{REC_DATA_B}\n\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::MissingEndOfFile,
+                3
+            ))
+        );
+
+        // Arrange: no records at all
+        let mut ih = IntelHex::new();
+
+        // Act
+        let res = ih.parse(b" \r\n");
+
+        // Assert
+        assert_eq!(
+            res,
+            Err(IntelHexError::ParseRecordError(
+                IntelHexErrorKind::MissingEndOfFile,
+                0
+            ))
+        );
+    }
+
+    #[test]
+    fn test_load_bin_address_overflow() {
+        // Arrange
+        let path = "tests/fixtures/ih_valid_1.bin";
+        let len = 51596;
+        let max_base = u32::MAX as usize - len + 1;
+
+        // Act & Assert: last byte at exactly u32::MAX is accepted
+        let mut ih = IntelHex::new();
+        assert!(ih.load_bin(path, max_base).is_ok());
+        assert_eq!(ih.get_max_addr(), Some(u32::MAX as usize));
+
+        // Act & Assert: one byte beyond u32::MAX is rejected, instance unchanged
+        let mut ih = IntelHex::new();
+        ih.parse(format!("{REC_DATA_A}\n{REC_EOF}\n").as_bytes())
+            .unwrap_or_default();
+        let original = ih.clone();
+
+        for base in [max_base + 1, u32::MAX as usize + 1, usize::MAX] {
+            let res = ih.load_bin(path, base);
+
+            assert_eq!(
+                res,
+                Err(IntelHexError::UpdateError(
+                    IntelHexErrorKind::AddressRangeOverflow
+                )),
+                "base 0x{base:X}"
+            );
+            assert_eq!(ih.buffer, original.buffer, "base 0x{base:X}");
+            assert_eq!(ih.size, original.size, "base 0x{base:X}");
+        }
+    }
+
+    #[test]
+    fn test_load_bin_empty_file() {
+        // Arrange
+        let path = "build/ut_load_bin_empty/empty.bin";
+        std::fs::create_dir_all("build/ut_load_bin_empty").unwrap_or_default();
+        std::fs::write(path, []).unwrap_or_default();
+
+        // Act
+        let mut ih = IntelHex::new();
+        let res = ih.load_bin(path, 0x0);
+
+        // Assert: no empty chunk is stored
+        assert!(res.is_ok());
+        assert!(ih.buffer.is_empty());
+        assert_eq!(ih.size, 0);
+        assert_eq!(ih.get_max_addr(), None);
+    }
+
+    #[test]
+    fn test_write_hex_address_overflow() {
+        // Arrange: data above the 32-bit range and an existing output file
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0xFFFF_FFF0, vec![0x0; 0x20]);
+        ih.size = 0x20;
+
+        let path = "build/ut_write_hex_overflow/ih.hex";
+        std::fs::create_dir_all("build/ut_write_hex_overflow").unwrap_or_default();
+        std::fs::write(path, "original").unwrap_or_default();
+
+        // Act
+        let res = ih.write_hex(path);
+
+        // Assert: error is returned and the existing file is untouched
+        assert_eq!(
+            res,
+            Err(IntelHexError::CreateRecordError(
+                IntelHexErrorKind::AddressRangeOverflow
+            ))
+        );
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap_or_default(),
+            "original"
+        );
+    }
+
+    /// Create an empty test directory under `build/` and return its path
+    fn fresh_test_dir(name: &str) -> PathBuf {
+        let dir = PathBuf::from("build").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_default();
+        dir
+    }
+
+    /// Number of entries in a directory (to check that no temporary files are left)
+    fn dir_entry_count(dir: &Path) -> usize {
+        std::fs::read_dir(dir).map_or(0, Iterator::count)
+    }
+
+    #[test]
+    fn test_write_file_atomically_failure_keeps_original() {
+        // Arrange
+        let dir = fresh_test_dir("ut_atomic_failure");
+        let path = dir.join("out.bin");
+        std::fs::write(&path, "original").unwrap_or_default();
+
+        // Act: some data is written, then the write fails
+        let res = write_file_atomically(&path, |writer| {
+            writer.write_all(b"partial data")?;
+            Err(IntelHexError::Io(std::io::Error::other(
+                "simulated failure",
+            )))
+        });
+
+        // Assert: error, original untouched, no temporary file left behind
+        assert!(matches!(res, Err(IntelHexError::Io(_))));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[test]
+    fn test_write_file_atomically_new_and_replace() {
+        // Arrange - new file in a directory that does not exist yet
+        let dir = fresh_test_dir("ut_atomic_replace");
+        let path = dir.join("sub").join("out.bin");
+
+        // Act & Assert - creates the file
+        assert!(write_file_atomically(&path, |w| Ok(w.write_all(b"first")?)).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "first");
+
+        // Act & Assert - replaces the file
+        assert!(write_file_atomically(&path, |w| Ok(w.write_all(b"2nd")?)).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "2nd");
+        assert_eq!(dir_entry_count(&dir.join("sub")), 1);
+    }
+
+    #[test]
+    fn test_write_hex_read_only_target() {
+        // Arrange
+        let dir = fresh_test_dir("ut_atomic_read_only");
+        let path = dir.join("ih.hex");
+        std::fs::write(&path, "original").unwrap_or_default();
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut permissions = meta.permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions).unwrap_or_default();
+        }
+
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x1, 0x2]);
+        ih.size = 2;
+
+        // Act
+        let res = ih.write_hex(&path);
+
+        // Assert: refused, original untouched
+        assert!(
+            matches!(&res, Err(IntelHexError::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_bin_keeps_permissions_and_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange: a file with custom permissions and a symlink pointing to it
+        let dir = fresh_test_dir("ut_atomic_unix");
+        let real = dir.join("real.bin");
+        let link = dir.join("link.bin");
+        std::fs::write(&real, "original").unwrap_or_default();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap_or_default();
+        std::os::unix::fs::symlink("real.bin", &link).unwrap_or_default();
+
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x0, vec![0x41, 0x42]);
+        ih.size = 2;
+
+        // Act: write through the symlink
+        let res = ih.write_bin(&link, 0xFF);
+
+        // Assert: target file replaced, link kept, permissions kept
+        assert!(res.is_ok());
+        assert_eq!(std::fs::read_to_string(&real).unwrap_or_default(), "AB");
+        assert!(std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()));
+        assert_eq!(
+            std::fs::metadata(&real)
+                .map(|m| m.permissions().mode() & 0o777)
+                .ok(),
+            Some(0o640)
+        );
+        assert_eq!(dir_entry_count(&dir), 2);
+    }
+
+    #[test]
     fn test_is_intel_hex_valid() {
         assert!(IntelHex::is_intel_hex(REC_EOF.as_bytes()));
         assert!(IntelHex::is_intel_hex(
@@ -2485,8 +2927,12 @@ mod tests {
 
 #[allow(clippy::items_after_test_module)]
 impl IntelHex {
+    /// Parse raw Intel HEX bytes without file I/O (benchmark-only access to `parse`).
+    ///
+    /// # Errors
+    /// Returns the parser's error if `raw_bytes` is not valid Intel HEX.
     #[cfg(feature = "benchmarking")]
-    pub fn bench_priv_parse(ih: &mut Self, raw_bytes: &[u8]) {
-        let _ = ih.parse(raw_bytes);
+    pub fn bench_priv_parse(ih: &mut Self, raw_bytes: &[u8]) -> Result<(), IntelHexError> {
+        ih.parse(raw_bytes)
     }
 }

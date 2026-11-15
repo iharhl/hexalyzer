@@ -1,4 +1,4 @@
-use crate::app::{EnterAction, HexSession};
+use crate::app::{EnterAction, HexSession, colors};
 use crate::events::EventState;
 use eframe::egui;
 
@@ -28,6 +28,8 @@ pub struct Search {
     pub(crate) length: usize,
     /// Index of the current search result
     idx: usize,
+    /// Error of the last search (invalid hex pattern or regex)
+    error: Option<(&'static str, String)>,
     /// Address of the current search result before a redo
     resume_from: Option<usize>,
 
@@ -53,6 +55,7 @@ impl Search {
         // Do not clear current to preserve text box content
         self.last = SearchState::default();
         self.idx = 0;
+        self.error = None;
         self.resume_from = None;
         self.force = false;
     }
@@ -88,13 +91,63 @@ impl Search {
     }
 }
 
+/// Accepted hex pattern formats, shown on hover
+const HEX_PATTERN_HINT: &str = "Enter pairs of hex digits, optionally separated by spaces\n\
+    or commas, lower cased or prefixed with 0x.\nExamples: `0A1B` | `0a 1b` | `0x0A, 0x1B`";
+
 impl HexSession {
+    /// Run the search for the current input and mode, filling `results` and `length`.
+    /// On invalid input, the results are cleared and `error` is set.
+    fn run_search(&mut self) {
+        let input = self.search.current.input.as_str();
+        self.search.error = None;
+
+        // Search if pattern is valid
+        let valid = match self.search.current.mode {
+            SearchMode::Hex => {
+                if let Some(pattern) = parse_str_into_bytes(input) {
+                    self.search.results = self.ih.search_bytes(&pattern);
+                    self.search.length = pattern.len();
+                    true
+                } else {
+                    self.search.error = Some(("Invalid hex pattern", HEX_PATTERN_HINT.to_string()));
+                    false
+                }
+            }
+            SearchMode::Ascii | SearchMode::Regex => {
+                let regex = self.search.current.mode == SearchMode::Regex;
+
+                if input.is_empty() {
+                    false
+                } else {
+                    match self.ih.search_ascii(input, regex) {
+                        Ok(results) => {
+                            self.search.results = results;
+                            // Regex: highlight the first byte of the match
+                            self.search.length = if regex { 1 } else { input.len() };
+                            true
+                        }
+                        Err(err) => {
+                            self.search.error = Some(("Invalid regex", err.to_string()));
+                            false
+                        }
+                    }
+                }
+            }
+        };
+
+        // Clear the result if pattern is not valid
+        if !valid {
+            self.search.results.clear();
+        }
+    }
+
     /// Show content of the search menu
     pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
         // RadioButtons to select between byte and ascii search
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.search.current.mode, SearchMode::Hex, "Hex")
-                .on_hover_text("Search for a byte pattern");
+                .on_hover_text(format!("Search for a byte pattern\n{HEX_PATTERN_HINT}"));
             ui.add_space(5.0);
             ui.radio_value(&mut self.search.current.mode, SearchMode::Ascii, "Ascii")
                 .on_hover_text("Search ASCII literals");
@@ -135,43 +188,7 @@ impl HexSession {
                     self.search.idx = (self.search.idx + 1) % self.search.results.len();
                 }
             } else {
-                let input = self.search.current.input.as_str();
-
-                // Search if pattern is valid
-                let valid = match self.search.current.mode {
-                    SearchMode::Hex => {
-                        if let Some(pattern) = parse_str_into_bytes(input) {
-                            self.search.results = self.ih.search_bytes(&pattern);
-                            self.search.length = pattern.len();
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    SearchMode::Ascii => {
-                        if input.is_empty() {
-                            false
-                        } else {
-                            self.search.results = self.ih.search_ascii(input, false);
-                            self.search.length = input.len();
-                            true
-                        }
-                    }
-                    SearchMode::Regex => {
-                        if input.is_empty() {
-                            false
-                        } else {
-                            self.search.results = self.ih.search_ascii(input, true);
-                            self.search.length = 1; // highlight the first byte of the match
-                            true
-                        }
-                    }
-                };
-
-                // Clear the result if pattern is not valid
-                if !valid {
-                    self.search.results.clear();
-                }
+                self.run_search();
 
                 // Verify that the results are sorted which is required for
                 // correct highlighting of the search hit.
@@ -200,6 +217,13 @@ impl HexSession {
 
         ui.add_space(5.0);
 
+        // Show the search error (details on hover)
+        if let Some((label, details)) = &self.search.error {
+            ui.label(egui::RichText::new(*label).color(colors::WARNING))
+                .on_hover_text(details);
+            return;
+        }
+
         // Show matches count if any
         let label_text = if self.search.results.is_empty() {
             "No results".to_string()
@@ -215,12 +239,42 @@ impl HexSession {
     }
 }
 
+/// Parse a hex byte pattern.
+///
+/// Groups of digits may be separated by whitespace or commas, and each group may have
+/// a `0x` / `0X` prefix, e.g. `0A1B`, `0A 1B`, `0x0A1B` or `0x0A, 0x1B`. A group must
+/// have an even number of digits, except a single digit, which is one byte (`0xA` = `0A`).
+///
+/// Returns `None` if the input is not a valid pattern.
 fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.is_ascii() && s.len().is_multiple_of(2) {
-        return (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-            .collect();
+    let mut bytes = Vec::new();
+
+    let groups = s
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|g| !g.is_empty());
+
+    for group in groups {
+        let digits = group
+            .strip_prefix("0x")
+            .or_else(|| group.strip_prefix("0X"))
+            .unwrap_or(group);
+
+        // Only ASCII hex digits
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+
+        match digits.len() {
+            1 => bytes.push(u8::from_str_radix(digits, 16).ok()?),
+            len if len.is_multiple_of(2) => {
+                for i in (0..len).step_by(2) {
+                    bytes.push(u8::from_str_radix(&digits[i..i + 2], 16).ok()?);
+                }
+            }
+            // Ambiguous, e.g. ABC could be 0A BC or AB 0C
+            _ => return None,
+        }
     }
-    None
+
+    Some(bytes)
 }

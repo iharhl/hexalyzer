@@ -10,11 +10,14 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
+/// New variants may be added in future versions
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IntelHexError {
     ParseRecordError(IntelHexErrorKind, usize),
     CreateRecordError(IntelHexErrorKind),
     UpdateError(IntelHexErrorKind),
+    SearchError(IntelHexErrorKind),
     Io(io::Error),
 }
 
@@ -23,7 +26,8 @@ impl PartialEq for IntelHexError {
         match (self, other) {
             (Self::ParseRecordError(a, la), Self::ParseRecordError(b, lb)) => a == b && la == lb,
             (Self::CreateRecordError(a), Self::CreateRecordError(b))
-            | (Self::UpdateError(a), Self::UpdateError(b)) => a == b,
+            | (Self::UpdateError(a), Self::UpdateError(b))
+            | (Self::SearchError(a), Self::SearchError(b)) => a == b,
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
             _ => false,
         }
@@ -53,6 +57,9 @@ impl fmt::Display for IntelHexError {
                     "Error encountered during update of IntelHex instance:\n{base_err}",
                 )
             }
+            Self::SearchError(base_err) => {
+                write!(f, "Error encountered during search:\n{base_err}")
+            }
             Self::Io(err) => {
                 write!(f, "I/O error: {err}")
             }
@@ -75,7 +82,9 @@ impl From<io::Error> for IntelHexError {
     }
 }
 
+/// New variants may be added in future versions
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IntelHexErrorKind {
     /// Record does not begin with a ':'
     MissingStartCode,
@@ -103,6 +112,8 @@ pub enum IntelHexErrorKind {
     InvalidRecordType,
     /// Provided address is invalid (e.g. does not hold any data)
     InvalidAddress(usize),
+    /// Range start address is greater than its end address
+    InvalidRange(usize, usize),
     /// Encountered second start address record
     DuplicateStartAddress,
     /// `IntelHex` instance has no data
@@ -111,6 +122,10 @@ pub enum IntelHexErrorKind {
     RelocateAddressOverflow(usize),
     /// Parsed address range exceeds the maximum supported (32-bit)
     AddressRangeOverflow,
+    /// Hex file has no end-of-file record
+    MissingEndOfFile,
+    /// Search pattern is not a valid regular expression
+    InvalidRegex(String),
 }
 
 impl fmt::Display for IntelHexErrorKind {
@@ -164,6 +179,12 @@ impl fmt::Display for IntelHexErrorKind {
             Self::InvalidAddress(address) => {
                 write!(f, "No data found at address: 0x{address:X}")
             }
+            Self::InvalidRange(start, end) => {
+                write!(
+                    f,
+                    "Invalid range: start address 0x{start:X} is greater than end address 0x{end:X}"
+                )
+            }
             Self::DuplicateStartAddress => {
                 write!(f, "Encountered second start address record")
             }
@@ -178,6 +199,12 @@ impl fmt::Display for IntelHexErrorKind {
             }
             Self::AddressRangeOverflow => {
                 write!(f, "Maximum address exceeds 32-bit range")
+            }
+            Self::MissingEndOfFile => {
+                write!(f, "Missing end-of-file record (file may be truncated)")
+            }
+            Self::InvalidRegex(msg) => {
+                write!(f, "Invalid regular expression: {msg}")
             }
         }
     }
