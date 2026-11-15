@@ -43,17 +43,13 @@ impl StepScrollArea {
             _ => ui.data_mut(|d| *d.get_temp_mut_or_default(self.id)),
         };
 
-        // Make discrete scroll logic (one row is a scroll step).
-        // Add threshold to ignore small drifts.
-        let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll_delta.abs() > 0.4 {
-            let row_delta = if scroll_delta > 0.0 { -1 } else { 1 };
-            top_row = top_row.saturating_add_signed(row_delta);
-        }
-
-        // Make view boundary.
         // Visible rows are not fully accurate. Had to add margin for a more consistent display.
         let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
+
+        // Scroll logic
+        top_row = self.apply_scroll(ui, top_row, full_row_size);
+
+        // Make view boundary.
         // At least one row is always treated as visible (tiny windows).
         let visible_rows = ((rect.height() / full_row_size).floor() as usize).max(1);
 
@@ -87,6 +83,31 @@ impl StepScrollArea {
 
         let row_range = top_row..(top_row + visible_rows).min(total_rows);
         add_contents(&mut child_ui, row_range)
+    }
+
+    /// Move `top_row` by the distance scrolled this frame, in whole rows.
+    ///
+    /// The view moves proportionally to the input: a wheel notch moves a couple of rows,
+    /// a trackpad follows the fingers. Distance smaller than a row is carried over to the
+    /// next frame and dropped once the scroll gesture ends, so it never leaks into the
+    /// next gesture. Rounding makes even a small wheel notch move at least one row.
+    #[allow(clippy::cast_possible_truncation)]
+    fn apply_scroll(&self, ui: &egui::Ui, top_row: usize, row_height: f32) -> usize {
+        let residual_id = self.id.with("scroll_residual");
+        let (delta, scrolling) =
+            ui.input(|i| (i.smooth_scroll_delta.y, i.scroll_source().is_some()));
+
+        let carried: f32 = if scrolling {
+            ui.data(|d| d.get_temp(residual_id).unwrap_or_default())
+        } else {
+            0.0
+        };
+        let distance = carried + delta;
+        let rows = (distance / row_height).round();
+        ui.data_mut(|d| d.insert_temp(residual_id, rows.mul_add(-row_height, distance)));
+
+        // A positive delta moves the content down, i.e. the view towards earlier rows
+        top_row.saturating_add_signed(-(rows as isize))
     }
 }
 

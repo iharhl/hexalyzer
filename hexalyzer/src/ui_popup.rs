@@ -257,8 +257,18 @@ impl PopupState {
                 );
 
                 if response.changed() {
-                    value.retain(|c| c.is_ascii_hexdigit());
-                    value.truncate(8);
+                    // Drop a pasted `0x` prefix (already shown as the label) before filtering,
+                    // so its `0` doesn't take up one of the 8 digits
+                    let input = value.trim_start();
+                    let input = input
+                        .strip_prefix("0x")
+                        .or_else(|| input.strip_prefix("0X"))
+                        .unwrap_or(input);
+                    *value = input
+                        .chars()
+                        .filter(char::is_ascii_hexdigit)
+                        .take(8)
+                        .collect();
                 }
             });
         });
