@@ -21,7 +21,7 @@ fn print_usage() {
     println!("  hexcli info <input>");
     println!("  hexcli relocate <input> <output> [options]");
     println!("  hexcli convert <input> <output> [options]");
-    println!("  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]");
+    println!("  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr] [options]");
     println!("\nOptions:");
     println!("  --address <val>    Base address for relocate / convert from BIN to HEX");
     println!(
@@ -55,14 +55,20 @@ fn main() {
 
 #[allow(clippy::too_many_lines)]
 fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    // Arguments after the command name
+    let rest = args.get(2..).unwrap_or_default();
+
     match cmd {
         "help" | "-h" | "--help" => {
             print_usage();
             Ok(())
         }
         "info" => {
+            let args = parse_args(cmd, rest, &[])?;
+
             // Guard: Check args count
-            let path_str = args.get(2).ok_or("Missing input file path")?;
+            let path_str = args.positional(0, "Missing input file path")?;
+            args.reject_extra_positional(1)?;
 
             // Guard: File must exist
             let abs_path =
@@ -71,9 +77,12 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             run_info(&abs_path)
         }
         "relocate" => {
+            let args = parse_args(cmd, rest, &["--address"])?;
+
             // Guard: Check file path arguments given
-            let in_path_str = args.get(2).ok_or("Missing input path")?;
-            let out_path_str = args.get(3).ok_or("Missing output path")?;
+            let in_path_str = args.positional(0, "Missing input path")?;
+            let out_path_str = args.positional(1, "Missing output path")?;
+            args.reject_extra_positional(2)?;
 
             // Guard: Check input exists
             let in_abs_path = validate_exists(in_path_str)?;
@@ -90,9 +99,9 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             }
 
             // Get relocation address
-            let addr_str = get_flag_value(args, "--address")?;
+            let addr_str = args.flag("--address");
             let addr = if let Some(addr) = addr_str {
-                parse_hex_str(&addr).map_err(|_e| format!("Invalid address: {addr}"))?
+                parse_hex_str(addr).map_err(|_e| format!("Invalid address: {addr}"))?
             } else {
                 return Err("Missing '--address' flag or the value after it".into());
             };
@@ -100,9 +109,12 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             run_relocate(&in_abs_path, &out_path, addr)
         }
         "convert" => {
+            let args = parse_args(cmd, rest, &["--address", "--gap-fill"])?;
+
             // Guard: Check file paths arguments given
-            let in_path_str = args.get(2).ok_or("Missing input path")?;
-            let out_path_str = args.get(3).ok_or("Missing output path")?;
+            let in_path_str = args.positional(0, "Missing input path")?;
+            let out_path_str = args.positional(1, "Missing output path")?;
+            args.reject_extra_positional(2)?;
 
             // Guard: Check input exists
             let in_abs_path = validate_exists(in_path_str)?;
@@ -121,8 +133,8 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                 return Err("Cannot convert between the same file type".into());
             }
 
-            let addr_str = get_flag_value(args, "--address")?;
-            let gap_fill_str = get_flag_value(args, "--gap-fill")?;
+            let addr_str = args.flag("--address");
+            let gap_fill_str = args.flag("--gap-fill");
 
             // Guard: Check address is provided ONLY if converting FROM bin
             if addr_str.is_some() && in_file_type != FileType::Bin {
@@ -136,7 +148,7 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             }
 
             let base_addr = if let Some(addr) = addr_str {
-                Some(parse_hex_str(&addr).map_err(|_e| format!("Invalid address: {addr}"))?)
+                Some(parse_hex_str(addr).map_err(|_e| format!("Invalid address: {addr}"))?)
             } else {
                 None
             };
@@ -147,28 +159,25 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                     "Gap fill '--gap-fill' is only supported for HEX to BIN conversion".into(),
                 );
             }
-            let gap_fill = gap_fill_str.map_or(Ok(0xFF), |s| parse_gap_fill(&s))?;
+            let gap_fill = gap_fill_str.map_or(Ok(0xFF), parse_gap_fill)?;
 
             run_convert(&in_abs_path, &out_path, base_addr, gap_fill)
         }
         "merge" => {
-            if args.len() < 5 {
+            let args = parse_args(cmd, rest, &["--gap-fill"])?;
+
+            // Guard: Output path and at least two inputs
+            if args.positional.len() < 3 {
                 return Err(
                     "Usage: hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]".into(),
                 );
             }
 
-            // Guard: Check output file path argument given
-            let out_path_str = args.get(2).ok_or("Missing output path")?;
-            let out_path = PathBuf::from(out_path_str);
+            let out_path = PathBuf::from(&args.positional[0]);
 
             // Collect input file paths and optional base addresses
             let mut inputs: Vec<(PathBuf, Option<usize>)> = Vec::new();
-            for arg in &args[3..] {
-                if arg.starts_with("--") {
-                    break; // stop at flags
-                }
-
+            for arg in &args.positional[1..] {
                 // Paths may contain ':' (e.g. `C:\fw\a.hex`), so it is split off only if
                 // the part before it is an existing file and the whole argument is not
                 let (path_str, addr_str) = match arg.rsplit_once(':') {
@@ -186,8 +195,7 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                 inputs.push((in_abs_path, addr));
             }
 
-            let gap_fill_str = get_flag_value(args, "--gap-fill")?;
-            let gap_fill = gap_fill_str.map_or(Ok(0xFF), |s| parse_gap_fill(&s))?;
+            let gap_fill = args.flag("--gap-fill").map_or(Ok(0xFF), parse_gap_fill)?;
 
             run_merge(inputs, &out_path, gap_fill)
         }
@@ -375,14 +383,76 @@ fn parse_gap_fill(s: &str) -> Result<u8, String> {
         .ok_or_else(|| format!("Invalid gap fill: {s} (expected a byte, 0x00 to 0xFF)"))
 }
 
-/// Find the value after a specific flag (e.g., "--gap-fill 0xFF").
-/// Returns `None` if the flag is not given, and an error if it has no value.
-fn get_flag_value(args: &[String], flag: &str) -> Result<Option<String>, String> {
-    let Some(pos) = args.iter().position(|arg| arg == flag) else {
-        return Ok(None);
-    };
-    match args.get(pos + 1) {
-        Some(value) if !value.starts_with("--") => Ok(Some(value.clone())),
-        _ => Err(format!("Missing value after '{flag}'")),
+/// All the flags CLI knows about.
+const KNOWN_FLAGS: [&str; 2] = ["--address", "--gap-fill"];
+
+/// Arguments that follow the command name, split into positional arguments and flag values.
+struct ParsedArgs {
+    positional: Vec<String>,
+    flags: Vec<(String, String)>,
+}
+
+impl ParsedArgs {
+    /// Value given for `flag`, if the flag was present.
+    fn flag(&self, flag: &str) -> Option<&str> {
+        self.flags
+            .iter()
+            .find(|(name, _)| name == flag)
+            .map(|(_, value)| value.as_str())
     }
+
+    /// Positional argument at `index`, or the `missing` error if there are too few.
+    fn positional(&self, index: usize, missing: &str) -> Result<&str, String> {
+        self.positional
+            .get(index)
+            .map(String::as_str)
+            .ok_or_else(|| missing.to_string())
+    }
+
+    /// Error if more than `max` positional arguments were given.
+    fn reject_extra_positional(&self, max: usize) -> Result<(), String> {
+        match self.positional.get(max) {
+            Some(extra) => Err(format!("Unexpected argument '{extra}'")),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Split the arguments after the command name into positional arguments and flags.
+/// Flags may appear anywhere. Everything after a bare `--` is treated as positional.
+/// Unknown, unsupported, repeated, or value-less flags cause errors.
+fn parse_args(cmd: &str, args: &[String], allowed: &[&str]) -> Result<ParsedArgs, String> {
+    let mut parsed = ParsedArgs {
+        positional: Vec::new(),
+        flags: Vec::new(),
+    };
+    let mut iter = args.iter();
+
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            parsed.positional.extend(iter.by_ref().cloned());
+            break;
+        }
+        if !arg.starts_with("--") {
+            parsed.positional.push(arg.clone());
+            continue;
+        }
+        if !KNOWN_FLAGS.contains(&arg.as_str()) {
+            return Err(format!("Unknown option '{arg}'"));
+        }
+        if !allowed.contains(&arg.as_str()) {
+            return Err(format!("Option '{arg}' is not supported by '{cmd}'"));
+        }
+        if parsed.flag(arg).is_some() {
+            return Err(format!("Option '{arg}' is given more than once"));
+        }
+        match iter.next() {
+            Some(value) if !value.starts_with("--") => {
+                parsed.flags.push((arg.clone(), value.clone()));
+            }
+            _ => return Err(format!("Missing value after '{arg}'")),
+        }
+    }
+
+    Ok(parsed)
 }

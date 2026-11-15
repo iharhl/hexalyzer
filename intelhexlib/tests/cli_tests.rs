@@ -202,7 +202,7 @@ fn test_ihex_relocate_invalid() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Argument '--address' is not a HEX output path"),
+        stderr.contains("Missing output path"),
         "stderr did not contain expected error text:\n{stderr}"
     );
 
@@ -651,4 +651,208 @@ fn test_ihex_merge_invalid() {
         stderr.contains("Unsupported file type") && stderr.contains("cli_tests.rs"),
         "stderr did not contain expected error text:\n{stderr}"
     );
+}
+
+#[test]
+fn test_ihex_flags_any_position() {
+    // ih_valid_2.hex covers 0x100..=0x13F and ih_valid_3.hex is moved to 0x200..=0x233,
+    // so a merged BIN is 0x134 bytes long with a gap at 0x140..=0x1FF
+    fn assert_merged_bin(path: &str, gap_fill: u8) {
+        let bytes = std::fs::read(path).unwrap_or_else(|_| panic!("Missing output: {path}"));
+        assert_eq!(bytes.len(), 0x134, "an input is missing from {path}");
+        assert!(
+            bytes[0x40..0x100].iter().all(|&b| b == gap_fill),
+            "gap in {path} is not filled with 0x{gap_fill:02X}"
+        );
+    }
+
+    let in_path_str_1 = "tests/fixtures/ih_valid_2.hex";
+    let in_path_str_2 = "tests/fixtures/ih_valid_3.hex:0x200";
+
+    // Act - merge with the flag before the output path
+    let out_path_str = "build/t5-cli/flag_first.bin";
+    let output = Command::new(HEXCLI_EXE)
+        .args([
+            "merge",
+            "--gap-fill",
+            "0x00",
+            out_path_str,
+            in_path_str_1,
+            in_path_str_2,
+        ])
+        .output()
+        .expect("Failed to run ihex");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_merged_bin(out_path_str, 0x00);
+
+    // Act - merge with the flag between the inputs
+    let out_path_str = "build/t5-cli/flag_between.bin";
+    let output = Command::new(HEXCLI_EXE)
+        .args([
+            "merge",
+            out_path_str,
+            in_path_str_1,
+            "--gap-fill",
+            "0x11",
+            in_path_str_2,
+        ])
+        .output()
+        .expect("Failed to run ihex");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_merged_bin(out_path_str, 0x11);
+
+    // Act - convert with the flag before the paths
+    let out_path_str = "build/t5-cli/convert.bin";
+    let output = Command::new(HEXCLI_EXE)
+        .args(["convert", "--gap-fill", "0x00", in_path_str_1, out_path_str])
+        .output()
+        .expect("Failed to run ihex");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let len = std::fs::metadata(out_path_str).map_or(0, |m| m.len());
+    assert_eq!(len, 0x40);
+
+    // Act - relocate with the flag before the paths
+    let out_path_str = "build/t5-cli/relocate.hex";
+    let output = Command::new(HEXCLI_EXE)
+        .args([
+            "relocate",
+            "--address",
+            "0xFF00",
+            in_path_str_1,
+            out_path_str,
+        ])
+        .output()
+        .expect("Failed to run ihex");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ih = IntelHex::from_hex(PathBuf::from(out_path_str)).unwrap_or_default();
+    assert_eq!(ih.get_min_addr().unwrap_or_default(), 0xFF00);
+
+    // Act - everything after a bare `--` is a path, not a flag
+    let out_path_str = "build/t5-cli/after_dashes.bin";
+    let output = Command::new(HEXCLI_EXE)
+        .args([
+            "merge",
+            "--gap-fill",
+            "0x22",
+            "--",
+            out_path_str,
+            in_path_str_1,
+            in_path_str_2,
+        ])
+        .output()
+        .expect("Failed to run ihex");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_merged_bin(out_path_str, 0x22);
+}
+
+#[test]
+fn test_ihex_flags_invalid() {
+    fn assert_fails_with(args: &[&str], expected: &str) {
+        let output = Command::new(HEXCLI_EXE)
+            .args(args)
+            .output()
+            .expect("Failed to run ihex");
+
+        assert!(!output.status.success(), "command succeeded: {args:?}");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "stderr did not contain '{expected}' for {args:?}:\n{stderr}"
+        );
+    }
+
+    let in_path_str_1 = "tests/fixtures/ih_valid_2.hex";
+    let in_path_str_2 = "tests/fixtures/ih_valid_3.hex:0x200";
+    let out_bin_str = "build/t6-cli/ih.bin";
+    let out_hex_str = "build/t6-cli/ih.hex";
+    std::fs::remove_file(out_bin_str).unwrap_or_default();
+    std::fs::remove_file(out_hex_str).unwrap_or_default();
+
+    // Act & Assert - unknown flag
+    assert_fails_with(
+        &["convert", in_path_str_1, out_bin_str, "--bogus"],
+        "Unknown option '--bogus'",
+    );
+
+    // Act & Assert - unknown flag between merge inputs (used to drop the next input)
+    assert_fails_with(
+        &[
+            "merge",
+            out_bin_str,
+            in_path_str_1,
+            "--bogus",
+            in_path_str_2,
+        ],
+        "Unknown option '--bogus'",
+    );
+
+    // Act & Assert - flag not supported by the command
+    assert_fails_with(
+        &[
+            "relocate",
+            in_path_str_1,
+            out_hex_str,
+            "--address",
+            "0xFF00",
+            "--gap-fill",
+            "0x00",
+        ],
+        "Option '--gap-fill' is not supported by 'relocate'",
+    );
+
+    // Act & Assert - repeated flag
+    assert_fails_with(
+        &[
+            "merge",
+            out_bin_str,
+            in_path_str_1,
+            in_path_str_2,
+            "--gap-fill",
+            "0x00",
+            "--gap-fill",
+            "0x11",
+        ],
+        "Option '--gap-fill' is given more than once",
+    );
+
+    // Act & Assert - extra positional argument
+    assert_fails_with(
+        &["convert", in_path_str_1, out_bin_str, "extra.bin"],
+        "Unexpected argument 'extra.bin'",
+    );
+
+    // None of the failed commands should have written an output file
+    assert!(!PathBuf::from(out_bin_str).exists());
+    assert!(!PathBuf::from(out_hex_str).exists());
 }
