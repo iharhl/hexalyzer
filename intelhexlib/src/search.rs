@@ -1,5 +1,5 @@
 use crate::IntelHexErrorKind;
-use regex::bytes::Regex;
+use regex::bytes::RegexBuilder;
 
 /// Slide window search for `BTreeMap<usize, Vec<u8>>`.
 /// Returns the starting addresses of all matches, sorted in ascending order.
@@ -38,7 +38,12 @@ pub fn search_regex<'a>(
     iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
     pattern: &str,
 ) -> Result<Vec<usize>, IntelHexErrorKind> {
-    let re = Regex::new(pattern).map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
+    // Unicode mode off: the data is raw bytes, so `\xFF` matches the byte 0xFF (not the
+    // UTF-8 encoding of U+00FF) and `.` matches any byte
+    let re = RegexBuilder::new(pattern)
+        .unicode(false)
+        .build()
+        .map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
 
     let mut matches = Vec::new();
 

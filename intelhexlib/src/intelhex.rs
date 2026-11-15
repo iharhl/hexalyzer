@@ -504,8 +504,8 @@ impl IntelHex {
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
-        // Parse contents
-        self.parse(&raw_bytes)?;
+        // Parse contents. On error, do not keep the records parsed before it.
+        self.parse(&raw_bytes).inspect_err(|_| self.clear())?;
 
         // Compute the payload size from the parsed buffer
         self.size = self.buffer.values().map(Vec::len).sum();
@@ -1263,7 +1263,7 @@ impl IntelHex {
     pub const fn set_max_payload_size(&mut self, size: u8) -> Result<(), IntelHexError> {
         if size == 0 {
             return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordInvalidPayloadLength,
+                IntelHexErrorKind::InvalidMaxPayloadSize,
             ));
         }
         self.max_payload_size = size as usize;

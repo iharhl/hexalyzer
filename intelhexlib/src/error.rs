@@ -42,6 +42,10 @@ impl Eq for IntelHexError {}
 impl fmt::Display for IntelHexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // Error on line 0 means the error is not tied to a line (e.g. an empty file)
+            Self::ParseRecordError(base_err, 0) => {
+                write!(f, "Error encountered during record parsing:\n{base_err}")
+            }
             Self::ParseRecordError(base_err, line) => {
                 write!(
                     f,
@@ -138,9 +142,12 @@ pub enum IntelHexErrorKind {
     FileHasHardLinks(u64),
     /// Target path is a symbolic link to a file that does not exist
     BrokenSymlink(PathBuf),
+    /// Max payload size per record must be at least 1 byte
+    InvalidMaxPayloadSize,
 }
 
 impl fmt::Display for IntelHexErrorKind {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingStartCode => {
@@ -232,6 +239,9 @@ impl fmt::Display for IntelHexErrorKind {
                     "Cannot save safely: the file has {count} hard links and saving would \
                      detach this one from the others. Save to another location instead."
                 )
+            }
+            Self::InvalidMaxPayloadSize => {
+                write!(f, "Max payload size per record must be at least 1 byte")
             }
             Self::BrokenSymlink(target) => {
                 write!(
