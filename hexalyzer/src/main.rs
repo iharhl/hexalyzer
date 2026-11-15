@@ -52,6 +52,10 @@ fn main() -> eframe::Result<()> {
 }
 
 impl eframe::App for HexViewerApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_close_request(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Clone the context to avoid holding an immutable borrow on `ui` while
         // also passing it mutably to panel methods. Context is an Arc internally,

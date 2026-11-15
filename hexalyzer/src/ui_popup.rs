@@ -66,6 +66,10 @@ pub enum PopupState {
         id: usize,
         reload_after: bool,
     },
+    QuitConfirm {
+        /// Names of the tabs with unsaved changes
+        names: Vec<String>,
+    },
 }
 
 impl PopupState {
@@ -77,18 +81,21 @@ impl PopupState {
             Self::Merge { .. } => "Merge",
             Self::InsertRange { .. } => "Insert Range",
             Self::RemoveRange { .. } => "Remove Range",
-            Self::CloseConfirm { .. } => "Unsaved Changes",
+            Self::CloseConfirm { .. } | Self::QuitConfirm { .. } => "Unsaved Changes",
         }
     }
 
     /// Returns `true` if this popup type should block interaction with the
     /// rest of the application.
     pub(crate) const fn is_blocking(&self) -> bool {
-        matches!(self, Self::Error(_) | Self::CloseConfirm { .. })
+        matches!(
+            self,
+            Self::Error(_) | Self::CloseConfirm { .. } | Self::QuitConfirm { .. }
+        )
     }
 
     /// Render the popup content and return what the user did with it.
-    /// For `CloseConfirm` popups, also sets the chosen `close_action`.
+    /// For `CloseConfirm` / `QuitConfirm` popups, also sets the chosen `close_action`.
     fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -144,6 +151,32 @@ impl PopupState {
                     for (label, action) in [
                         ("Save", CloseAction::Save),
                         ("Export...", CloseAction::Export),
+                        ("Don't Save", CloseAction::DontSave),
+                    ] {
+                        if ui.button(label).clicked() {
+                            *close_action = Some(action);
+                            outcome = PopupOutcome::Confirmed;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        outcome = PopupOutcome::Dismissed;
+                    }
+                });
+                outcome
+            }
+            Self::QuitConfirm { names } => {
+                ui.label("These files have unsaved changes:");
+                for name in names.iter() {
+                    ui.label(format!("  •  {name}"));
+                }
+                ui.add_space(5.0);
+                ui.label("Save them before quitting?");
+                ui.add_space(10.0);
+
+                let mut outcome = PopupOutcome::Open;
+                ui.horizontal(|ui| {
+                    for (label, action) in [
+                        ("Save All", CloseAction::Save),
                         ("Don't Save", CloseAction::DontSave),
                     ] {
                         if ui.button(label).clicked() {
@@ -312,7 +345,27 @@ impl PopupState {
             Self::CloseConfirm { id, reload_after } => {
                 Self::handle_close_confirm(app, id, reload_after);
             }
+            Self::QuitConfirm { .. } => Self::handle_quit_confirm(app),
         }
+    }
+
+    fn handle_quit_confirm(app: &mut HexViewerApp) {
+        if app.popup.close_action.take() == Some(CloseAction::Save) {
+            for index in 0..app.sessions.len() {
+                if !app.has_unsaved_changes(index) {
+                    continue;
+                }
+                // Show the tab being saved, e.g. if its save fails or needs a confirmation
+                app.active_index = Some(index);
+                // Stay open if saving failed or was canceled
+                if !app.save_curr_session() {
+                    return;
+                }
+            }
+        }
+
+        // The window is closed by `handle_close_request` on the next frame
+        app.quit_confirmed = true;
     }
 
     fn handle_close_confirm(app: &mut HexViewerApp, id: usize, reload_after: bool) {
@@ -436,6 +489,9 @@ impl HexViewerApp {
                 && let Some(state) = self.popup.state.take()
             {
                 state.on_confirm(self);
+                // Run the next frame right away to close the window after
+                // a confirmed quit
+                ctx.request_repaint();
             }
 
             self.popup.clear();

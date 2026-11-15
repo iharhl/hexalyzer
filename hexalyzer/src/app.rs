@@ -95,6 +95,9 @@ pub struct HexViewerApp {
 
     /// Gap fill byte used when exporting to binary (0x00 or 0xFF)
     pub gap_fill: u8,
+
+    /// Set once the user has confirmed quitting with unsaved changes
+    pub(crate) quit_confirmed: bool,
 }
 
 impl Default for HexSession {
@@ -178,6 +181,7 @@ impl Default for HexViewerApp {
             events: EventState::default(),
             error: None,
             gap_fill: 0x00,
+            quit_confirmed: false,
         }
     }
 }

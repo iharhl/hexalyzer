@@ -1,5 +1,6 @@
 use crate::app::{HexSession, HexViewerApp};
 use crate::byteedit::ByteEdit;
+use crate::ui_popup::PopupState;
 use eframe::egui;
 use intelhexlib::IntelHex;
 use std::fs::File;
@@ -417,6 +418,40 @@ impl HexViewerApp {
         }
 
         true
+    }
+
+    /// Intercepts the request to close the app window.
+    /// If any tab has unsaved changes, cancels the close and asks the user first.
+    /// Once the user confirms, closes the window.
+    ///
+    /// Known limitation: on macOS, Cmd+Q and Quit from the Dock bypass this check.
+    pub(crate) fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if self.quit_confirmed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+
+        let unsaved: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| s.has_unsaved_changes())
+            .map(|s| s.name.clone())
+            .collect();
+
+        if unsaved.is_empty() {
+            return;
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+
+        // Clear error (in case it was set before), so that its popup is not
+        // re-opened over this one
+        self.error = None;
+        self.popup.open(PopupState::QuitConfirm { names: unsaved });
     }
 
     /// Intercepts save shortcut at the start of the frame and performs the save
