@@ -247,7 +247,7 @@ fn test_ihex_relocate_invalid() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Missing '--address' flag or the value after it"),
+        stderr.contains("Missing value after '--address'"),
         "stderr did not contain expected error text:\n{stderr}"
     );
 }

@@ -90,7 +90,7 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             }
 
             // Get relocation address
-            let addr_str = get_flag_value(args, "--address");
+            let addr_str = get_flag_value(args, "--address")?;
             let addr = if let Some(addr) = addr_str {
                 parse_hex_str(&addr).map_err(|_e| format!("Invalid address: {addr}"))?
             } else {
@@ -121,8 +121,8 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                 return Err("Cannot convert between the same file type".into());
             }
 
-            let addr_str = get_flag_value(args, "--address");
-            let gap_fill_str = get_flag_value(args, "--gap-fill");
+            let addr_str = get_flag_value(args, "--address")?;
+            let gap_fill_str = get_flag_value(args, "--gap-fill")?;
 
             // Guard: Check address is provided ONLY if converting FROM bin
             if addr_str.is_some() && in_file_type != FileType::Bin {
@@ -147,14 +147,7 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                     "Gap fill '--gap-fill' is only supported for HEX to BIN conversion".into(),
                 );
             }
-            let gap_fill = if let Some(gap_fill) = gap_fill_str {
-                u8::try_from(
-                    parse_hex_str(&gap_fill)
-                        .map_err(|_e| format!("Invalid gap fill: {gap_fill}"))?,
-                )?
-            } else {
-                0xFF
-            };
+            let gap_fill = gap_fill_str.map_or(Ok(0xFF), |s| parse_gap_fill(&s))?;
 
             run_convert(&in_abs_path, &out_path, base_addr, gap_fill)
         }
@@ -176,28 +169,25 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
                     break; // stop at flags
                 }
 
-                let parts: Vec<&str> = arg.split(':').collect();
-                let in_abs_path = validate_exists(parts[0])?;
-                let addr = if parts.len() > 1 {
-                    Some(
-                        parse_hex_str(parts[1])
-                            .map_err(|_e| format!("Invalid address: {}", parts[1]))?,
-                    )
-                } else {
-                    None
+                // Paths may contain ':' (e.g. `C:\fw\a.hex`), so it is split off only if
+                // the part before it is an existing file and the whole argument is not
+                let (path_str, addr_str) = match arg.rsplit_once(':') {
+                    Some((path, addr))
+                        if Path::new(path).is_file() && !Path::new(arg).is_file() =>
+                    {
+                        (path, Some(addr))
+                    }
+                    _ => (arg.as_str(), None),
                 };
+                let addr = addr_str
+                    .map(|a| parse_hex_str(a).map_err(|_e| format!("Invalid address: {a}")))
+                    .transpose()?;
+                let in_abs_path = validate_exists(path_str)?;
                 inputs.push((in_abs_path, addr));
             }
 
-            let gap_fill_str = get_flag_value(args, "--gap-fill");
-            let gap_fill = if let Some(gap_fill) = gap_fill_str {
-                u8::try_from(
-                    parse_hex_str(&gap_fill)
-                        .map_err(|_e| format!("Invalid gap fill: {gap_fill}"))?,
-                )?
-            } else {
-                0xFF
-            };
+            let gap_fill_str = get_flag_value(args, "--gap-fill")?;
+            let gap_fill = gap_fill_str.map_or(Ok(0xFF), |s| parse_gap_fill(&s))?;
 
             run_merge(inputs, &out_path, gap_fill)
         }
@@ -377,10 +367,22 @@ fn validate_exists(path_str: &str) -> Result<PathBuf, Box<dyn std::error::Error>
     Ok(std::fs::canonicalize(path)?)
 }
 
-/// Find the value after a specific flag (e.g., "--gap-fill 0xFF")
-fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|arg| arg == flag)
-        .and_then(|pos| args.get(pos + 1))
-        .cloned()
+/// Parse the gap fill byte
+fn parse_gap_fill(s: &str) -> Result<u8, String> {
+    parse_hex_str(s)
+        .ok()
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| format!("Invalid gap fill: {s} (expected a byte, 0x00 to 0xFF)"))
+}
+
+/// Find the value after a specific flag (e.g., "--gap-fill 0xFF").
+/// Returns `None` if the flag is not given, and an error if it has no value.
+fn get_flag_value(args: &[String], flag: &str) -> Result<Option<String>, String> {
+    let Some(pos) = args.iter().position(|arg| arg == flag) else {
+        return Ok(None);
+    };
+    match args.get(pos + 1) {
+        Some(value) if !value.starts_with("--") => Ok(Some(value.clone())),
+        _ => Err(format!("Missing value after '{flag}'")),
+    }
 }
