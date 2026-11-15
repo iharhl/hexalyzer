@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+  # Lets release.yaml run the same checks before building
+  workflow_call:
 
 permissions:
   contents: read
