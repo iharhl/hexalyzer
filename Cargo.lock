@@ -1546,6 +1546,7 @@ dependencies = [
  "eframe",
  "intelhexlib",
  "rfd",
+ "same-file",
  "winresource",
 ]
 

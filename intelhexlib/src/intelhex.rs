@@ -21,6 +21,10 @@ const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 /// Counter that makes temporary file names unique within the process
 static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// Number of characters of the target's file name kept in the temporary file name.
+/// Keeps the temporary name within file system limits (usually 255 bytes) for long names.
+const TEMP_FILE_NAME_PREFIX_LEN: usize = 32;
+
 /// Write a file atomically (fully written or not changed at all).
 ///
 /// The content is written to a temporary file next to the target, flushed and synced
@@ -30,6 +34,11 @@ static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// - Creates missing parent directories.
 /// - If the target is a symlink, the file it points to is replaced (the link is kept).
 /// - If the target exists, it must be writable, and its permissions are kept.
+///
+/// Refuses to write when:
+/// - the directory does not allow creating the temporary file
+/// - the target has other hard links (Unix only), which a rename would detach
+/// - the target is a symlink to a file that does not exist
 fn write_file_atomically(
     filepath: &Path,
     write: impl FnOnce(&mut BufWriter<File>) -> Result<(), IntelHexError>,
@@ -40,18 +49,49 @@ fn write_file_atomically(
     }
 
     // Resolve symlinks, so the link itself is not replaced by a regular file
-    let target = std::fs::canonicalize(filepath).unwrap_or_else(|_| filepath.to_path_buf());
+    let target = match std::fs::canonicalize(filepath) {
+        Ok(target) => target,
+        // A symlink whose target does not exist (rename would replace the link)
+        Err(_) if filepath.is_symlink() => {
+            let link_target = std::fs::read_link(filepath)?;
+            return Err(IntelHexError::WriteError(IntelHexErrorKind::BrokenSymlink(
+                link_target,
+            )));
+        }
+        // A new file
+        Err(_) => filepath.to_path_buf(),
+    };
 
     // An existing target must be writable
     let permissions = if target.exists() {
         let file = OpenOptions::new().write(true).open(&target)?;
-        Some(file.metadata()?.permissions())
+        let metadata = file.metadata()?;
+
+        // The rename would give this name a new file (other hard links keep the old data)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.nlink() > 1 {
+                return Err(IntelHexError::WriteError(
+                    IntelHexErrorKind::FileHasHardLinks(metadata.nlink()),
+                ));
+            }
+        }
+
+        Some(metadata.permissions())
     } else {
         None
     };
 
-    // Create temporary file in the same directory
-    let file_name = target.file_name().unwrap_or_default().to_string_lossy();
+    // Create temporary file in the same directory.
+    // Only a prefix of the file name is used, so long names do not exceed the length limit.
+    let file_name: String = target
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+        .take(TEMP_FILE_NAME_PREFIX_LEN)
+        .collect();
     let temp_path = target.with_file_name(format!(
         ".{file_name}.{}.{}.tmp",
         std::process::id(),
@@ -62,7 +102,15 @@ fn write_file_atomically(
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temp_path)?;
+            .open(&temp_path)
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::PermissionDenied {
+                    let dir = target.parent().unwrap_or(&target).to_path_buf();
+                    IntelHexError::WriteError(IntelHexErrorKind::DirectoryNotWritable(dir))
+                } else {
+                    err.into()
+                }
+            })?;
         let mut writer = BufWriter::new(file);
 
         write(&mut writer)?;
@@ -456,8 +504,8 @@ impl IntelHex {
         // Load filepath
         self.filepath = filepath.as_ref().to_path_buf();
 
-        // Parse contents
-        self.parse(&raw_bytes)?;
+        // Parse contents. On error, do not keep the records parsed before it.
+        self.parse(&raw_bytes).inspect_err(|_| self.clear())?;
 
         // Compute the payload size from the parsed buffer
         self.size = self.buffer.values().map(Vec::len).sum();
@@ -1055,9 +1103,10 @@ impl IntelHex {
     pub fn update_range(&mut self, start_addr: usize, data: &[u8]) -> Result<(), IntelHexError> {
         let len = data.len();
 
-        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=start_addr).next_back() {
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=start_addr).next_back()
+            && let Some(end_addr) = start_addr.checked_add(len)
+        {
             let chunk_end = chunk_start + chunk_data.len();
-            let end_addr = start_addr + len;
 
             // Check the entire range fits within a single chunk
             if start_addr >= chunk_start && end_addr <= chunk_end {
@@ -1214,7 +1263,7 @@ impl IntelHex {
     pub const fn set_max_payload_size(&mut self, size: u8) -> Result<(), IntelHexError> {
         if size == 0 {
             return Err(IntelHexError::UpdateError(
-                IntelHexErrorKind::RecordInvalidPayloadLength,
+                IntelHexErrorKind::InvalidMaxPayloadSize,
             ));
         }
         self.max_payload_size = size as usize;
@@ -2535,6 +2584,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_update_range_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.size = 4;
+
+        // Act & Assert - a range past the end of the address space is rejected, not a panic
+        assert_eq!(
+            ih.update_range(usize::MAX, &[0x0, 0x0]),
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(usize::MAX)
+            ))
+        );
+        assert_eq!(
+            ih.update_range(usize::MAX - 1, &[0x0, 0x0, 0x0]),
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(usize::MAX - 1)
+            ))
+        );
+        assert_eq!(
+            ih.buffer,
+            BTreeMap::from([(0x1000, vec![0x1, 0x2, 0x3, 0x4])])
+        );
+    }
+
     // Valid records used by the parse / detection tests
     const REC_DATA_A: &str = ":0100000041BE"; // 1 byte 'A' at 0x0000
     const REC_DATA_B: &str = ":0100010042BC"; // 1 byte 'B' at 0x0001
@@ -2883,6 +2958,102 @@ mod tests {
             Some(0o640)
         );
         assert_eq!(dir_entry_count(&dir), 2);
+    }
+
+    #[test]
+    fn test_write_file_atomically_long_file_name() {
+        // Arrange: a name at the usual 255-byte limit
+        let dir = fresh_test_dir("ut_atomic_long_name");
+        let path = dir.join(format!("{}.bin", "a".repeat(251)));
+
+        // Act & Assert: the temporary name stays within the limit
+        assert!(write_file_atomically(&path, |w| Ok(w.write_all(b"data")?)).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "data");
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_file_atomically_directory_not_writable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange: a writable file in a read-only directory
+        let dir = fresh_test_dir("ut_atomic_read_only_dir");
+        let path = dir.join("out.bin");
+        std::fs::write(&path, "original").unwrap_or_default();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap_or_default();
+
+        // Act
+        let res = write_file_atomically(&path, |w| Ok(w.write_all(b"new")?));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap_or_default();
+
+        // Assert: refused with a clear error, original untouched
+        assert_eq!(
+            res,
+            Err(IntelHexError::WriteError(
+                IntelHexErrorKind::DirectoryNotWritable(
+                    std::fs::canonicalize(&dir).unwrap_or_default()
+                )
+            ))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_file_atomically_hard_links() {
+        // Arrange: a file with two hard links
+        let dir = fresh_test_dir("ut_atomic_hard_link");
+        let path = dir.join("a.bin");
+        let other = dir.join("b.bin");
+        std::fs::write(&path, "original").unwrap_or_default();
+        std::fs::hard_link(&path, &other).unwrap_or_default();
+
+        // Act
+        let res = write_file_atomically(&path, |w| Ok(w.write_all(b"new")?));
+
+        // Assert: refused, both names still show the original data
+        assert_eq!(
+            res,
+            Err(IntelHexError::WriteError(
+                IntelHexErrorKind::FileHasHardLinks(2)
+            ))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap_or_default(),
+            "original"
+        );
+        assert_eq!(dir_entry_count(&dir), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_file_atomically_broken_symlink() {
+        // Arrange: a symlink to a file that does not exist
+        let dir = fresh_test_dir("ut_atomic_broken_symlink");
+        let link = dir.join("link.bin");
+        std::os::unix::fs::symlink("missing.bin", &link).unwrap_or_default();
+
+        // Act
+        let res = write_file_atomically(&link, |w| Ok(w.write_all(b"new")?));
+
+        // Assert: refused, the link is kept
+        assert_eq!(
+            res,
+            Err(IntelHexError::WriteError(IntelHexErrorKind::BrokenSymlink(
+                PathBuf::from("missing.bin")
+            )))
+        );
+        assert!(std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()));
+        assert_eq!(dir_entry_count(&dir), 1);
     }
 
     #[test]

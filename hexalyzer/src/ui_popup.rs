@@ -9,6 +9,9 @@ use std::path::PathBuf;
 /// allocating gigabytes on the UI thread.
 const MAX_INSERT_RANGE_SIZE: usize = 256 * 1024 * 1024;
 
+/// Width at which the text of a blocking popup wraps
+const MODAL_MAX_WIDTH: f32 = 420.0;
+
 //  ========================== Close Action ================================== //
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +21,25 @@ pub enum CloseAction {
     DontSave,
 }
 
+//  ========================== Popup Outcome ================================= //
+
+/// What the user did with the popup in this frame
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PopupOutcome {
+    /// Nothing - the popup stays open
+    Open,
+    /// Confirmed (OK / Enter / a close action) - run the confirm action and close
+    Confirmed,
+    /// Dismissed (OK on an error / Cancel) - close without any action
+    Dismissed,
+}
+
+impl PopupOutcome {
+    const fn confirmed_if(cond: bool) -> Self {
+        if cond { Self::Confirmed } else { Self::Open }
+    }
+}
+
 //  ========================== Popup State =================================== //
 
 #[derive(Debug)]
@@ -25,24 +47,32 @@ pub enum PopupState {
     Error(String),
     About,
     ReAddr {
+        id: usize,
         addr: String,
     },
     Merge {
+        id: usize,
         path: PathBuf,
         addr_curr: String,
         addr_merge: String,
     },
     InsertRange {
+        id: usize,
         start: String,
         end: String,
     },
     RemoveRange {
+        id: usize,
         start: String,
         end: String,
     },
     CloseConfirm {
-        session_id: usize,
+        id: usize,
         reload_after: bool,
+    },
+    QuitConfirm {
+        /// Names of the tabs with unsaved changes
+        names: Vec<String>,
     },
 }
 
@@ -55,29 +85,55 @@ impl PopupState {
             Self::Merge { .. } => "Merge",
             Self::InsertRange { .. } => "Insert Range",
             Self::RemoveRange { .. } => "Remove Range",
-            Self::CloseConfirm { .. } => "Unsaved Changes",
+            Self::CloseConfirm { .. } | Self::QuitConfirm { .. } => "Unsaved Changes",
+        }
+    }
+
+    /// ID of the session an edit popup acts on
+    const fn target_id(&self) -> Option<usize> {
+        match self {
+            Self::ReAddr { id, .. }
+            | Self::Merge { id, .. }
+            | Self::InsertRange { id, .. }
+            | Self::RemoveRange { id, .. } => Some(*id),
+            _ => None,
         }
     }
 
     /// Returns `true` if this popup type should block interaction with the
     /// rest of the application.
     pub(crate) const fn is_blocking(&self) -> bool {
-        matches!(self, Self::Error(_) | Self::CloseConfirm { .. })
+        matches!(
+            self,
+            Self::Error(_) | Self::CloseConfirm { .. } | Self::QuitConfirm { .. }
+        )
     }
 
-    /// Render the popup content. Returns `true` when the user confirms (OK / Enter).
-    /// For `CloseConfirm` popups, also sets `close_action` on the Popup container.
-    fn show(&mut self, ui: &mut egui::Ui, events: &events::EventState) -> bool {
+    /// Render the popup content and return what the user did with it.
+    /// For `CloseConfirm` / `QuitConfirm` popups, also sets the chosen `close_action`.
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        events: &events::EventState,
+        close_action: &mut Option<CloseAction>,
+    ) -> PopupOutcome {
         match self {
             Self::Error(msg) => {
                 ui.label(msg.as_str());
                 ui.add_space(10.0);
-                false
+                if ui.button(" OK ").clicked() {
+                    PopupOutcome::Dismissed
+                } else {
+                    PopupOutcome::Open
+                }
             }
-            Self::About => Self::show_about(ui),
-            Self::ReAddr { addr: address } => {
+            Self::About => {
+                Self::show_about(ui);
+                PopupOutcome::Open
+            }
+            Self::ReAddr { addr: address, .. } => {
                 Self::show_hex_field(ui, "New start address:", address);
-                ui.button(" OK ").clicked() || events.enter_released
+                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
             }
             Self::Merge {
                 addr_curr: addr_current,
@@ -94,22 +150,65 @@ impl PopupState {
                     "New start address for the selected file:\n(leave empty to not change it)",
                     addr_merge,
                 );
-                ui.button(" OK ").clicked() || events.enter_released
+                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
             }
-            Self::InsertRange { start, end } | Self::RemoveRange { start, end } => {
+            Self::InsertRange { start, end, .. } | Self::RemoveRange { start, end, .. } => {
                 Self::show_hex_field(ui, "Start address:", start);
                 Self::show_hex_field(ui, "End address (inclusive):", end);
-                ui.button(" OK ").clicked() || events.enter_released
+                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
             }
             Self::CloseConfirm { .. } => {
                 ui.label("This file has unsaved changes. What would you like to do?");
                 ui.add_space(10.0);
-                false
+
+                let mut outcome = PopupOutcome::Open;
+                ui.horizontal(|ui| {
+                    for (label, action) in [
+                        ("Save", CloseAction::Save),
+                        ("Export...", CloseAction::Export),
+                        ("Don't Save", CloseAction::DontSave),
+                    ] {
+                        if ui.button(label).clicked() {
+                            *close_action = Some(action);
+                            outcome = PopupOutcome::Confirmed;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        outcome = PopupOutcome::Dismissed;
+                    }
+                });
+                outcome
+            }
+            Self::QuitConfirm { names } => {
+                ui.label("These files have unsaved changes:");
+                for name in names.iter() {
+                    ui.label(format!("  •  {name}"));
+                }
+                ui.add_space(5.0);
+                ui.label("Save them before quitting?");
+                ui.add_space(10.0);
+
+                let mut outcome = PopupOutcome::Open;
+                ui.horizontal(|ui| {
+                    for (label, action) in [
+                        ("Save All", CloseAction::Save),
+                        ("Don't Save", CloseAction::DontSave),
+                    ] {
+                        if ui.button(label).clicked() {
+                            *close_action = Some(action);
+                            outcome = PopupOutcome::Confirmed;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        outcome = PopupOutcome::Dismissed;
+                    }
+                });
+                outcome
             }
         }
     }
 
-    fn show_about(ui: &mut egui::Ui) -> bool {
+    fn show_about(ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.add_space(5.0);
 
@@ -142,8 +241,6 @@ impl PopupState {
             ));
             ui.add_space(5.0);
         });
-
-        false
     }
 
     fn show_hex_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
@@ -171,8 +268,15 @@ impl PopupState {
 
     /// Execute the action for a confirmed popup
     fn on_confirm(self, app: &mut HexViewerApp) {
+        // Act on the tab the pop-up was opened for (might be different from active one)
+        if let Some(id) = self.target_id()
+            && !app.switch_to_session(id)
+        {
+            return;
+        }
+
         match self {
-            Self::ReAddr { addr: address } => {
+            Self::ReAddr { addr: address, .. } => {
                 let Some(addr) = usize::from_str_radix(&address, 16).ok() else {
                     app.error.replace("Invalid address format".to_string());
                     return;
@@ -195,7 +299,7 @@ impl PopupState {
 
                 curr_session.on_layout_changed();
             }
-            Self::InsertRange { start, end } => {
+            Self::InsertRange { start, end, .. } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
                 let end_addr = usize::from_str_radix(&end, 16).ok();
 
@@ -224,7 +328,7 @@ impl PopupState {
 
                 curr_session.on_layout_changed();
             }
-            Self::RemoveRange { start, end } => {
+            Self::RemoveRange { start, end, .. } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
                 let end_addr = usize::from_str_radix(&end, 16).ok();
 
@@ -248,6 +352,7 @@ impl PopupState {
                 path,
                 addr_curr: addr_current,
                 addr_merge,
+                ..
             } => {
                 let addr1 = usize::from_str_radix(&addr_current, 16).ok();
                 let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
@@ -260,25 +365,47 @@ impl PopupState {
                 }
             }
             Self::Error(_) | Self::About => {}
-            Self::CloseConfirm {
-                session_id,
-                reload_after,
-            } => {
-                Self::handle_close_confirm(app, session_id, reload_after);
+            Self::CloseConfirm { id, reload_after } => {
+                Self::handle_close_confirm(app, id, reload_after);
             }
+            Self::QuitConfirm { .. } => Self::handle_quit_confirm(app),
         }
     }
 
-    fn handle_close_confirm(app: &mut HexViewerApp, session_id: usize, reload_after: bool) {
+    fn handle_quit_confirm(app: &mut HexViewerApp) {
+        if app.popup.close_action.take() == Some(CloseAction::Save) {
+            for index in 0..app.sessions.len() {
+                if !app.has_unsaved_changes(index) {
+                    continue;
+                }
+                // Show the tab being saved, e.g. if its save fails or needs a confirmation
+                app.active_index = Some(index);
+                // Stay open if saving failed or was canceled
+                if !app.save_curr_session() {
+                    return;
+                }
+            }
+        }
+
+        // The window is closed by `handle_close_request` on the next frame
+        app.quit_confirmed = true;
+    }
+
+    fn handle_close_confirm(app: &mut HexViewerApp, id: usize, reload_after: bool) {
         let action = app
             .popup
             .close_action
             .take()
             .unwrap_or(CloseAction::DontSave);
 
+        // The tab may have been closed while the popup was open -> nothing to do
+        let Some(index) = app.get_session_index(id) else {
+            return;
+        };
+
         // Swap the active session to the one being closed (in case the user
         // closes the tab that is not in the view)
-        app.active_index = Some(session_id);
+        app.active_index = Some(index);
 
         let saved = match action {
             CloseAction::Save => app.save_curr_session(),
@@ -292,9 +419,9 @@ impl PopupState {
         }
 
         if reload_after {
-            app.reload_file(session_id);
+            app.reload_file(index);
         } else {
-            app.close_file(session_id);
+            app.close_file(index);
         }
     }
 }
@@ -326,108 +453,100 @@ impl Popup {
 //  ========================== HexViewerApp ================================== //
 
 impl HexViewerApp {
+    /// Ask the user what to do with the unsaved changes of the session at `index`
+    /// before closing it (or reloading it, if `reload_after` is set).
+    pub(crate) fn open_close_confirm(&mut self, index: usize, reload_after: bool) {
+        if let Some(session) = self.sessions.get(index) {
+            self.popup.open(PopupState::CloseConfirm {
+                id: session.id,
+                reload_after,
+            });
+        }
+    }
+
+    /// Make the session with the given id the active one.
+    /// Returns `false` if there is no such session (e.g. tab was closed).
+    fn switch_to_session(&mut self, id: usize) -> bool {
+        let Some(index) = self.get_session_index(id) else {
+            return false;
+        };
+        self.active_index = Some(index);
+        true
+    }
+
     /// Show the pop-up
     pub(crate) fn show_popup(&mut self, ctx: &egui::Context) {
-        let content_rect = ctx.content_rect();
+        // Name of the file an edit popup acts on. Close the popup if its tab is gone.
+        let target_index = self
+            .popup
+            .state
+            .as_ref()
+            .and_then(PopupState::target_id)
+            .map(|id| self.get_session_index(id));
+        let target_name = match target_index {
+            Some(Some(index)) => Some(self.sessions[index].name.as_str()),
+            Some(None) => {
+                self.popup.clear();
+                return;
+            }
+            None => None,
+        };
 
-        let mut is_open = self.popup.active;
-        let was_open = self.popup.active;
-
-        let Some(popup_state) = self.popup.state.as_mut() else {
+        let Some(state) = self.popup.state.as_mut() else {
             self.popup.clear();
             return;
         };
 
-        let blocking = popup_state.is_blocking();
+        let title = state.title();
+        let events = &self.events;
+        let close_action = &mut self.popup.close_action;
+        let mut is_open = true;
 
-        if blocking {
-            // Block interactions
-            egui::Area::new(egui::Id::from("modal_blocker"))
-                .order(egui::Order::Background)
-                .fixed_pos(content_rect.left_top())
+        let outcome = if state.is_blocking() {
+            // A modal blocks both the pointer and keyboard focus for everything below
+            // it, so nothing behind the popup can be activated while it is open
+            egui::Modal::new(egui::Id::new("blocking_popup"))
+                .backdrop_color(colors::SHADOW)
                 .show(ctx, |ui| {
-                    ui.allocate_rect(content_rect, egui::Sense::click());
-                });
-
-            // Darken the background
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background,
-                egui::Id::new("modal_bg"),
-            ));
-            painter.rect_filled(content_rect, 0.0, colors::SHADOW);
-        }
-
-        // Display the pop-up
-        let mut window = egui::Window::new(popup_state.title())
-            .open(&mut is_open)
-            .collapsible(false)
-            .resizable(false);
-
-        if blocking {
-            window = window.anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]);
+                    ui.set_max_width(MODAL_MAX_WIDTH);
+                    ui.label(egui::RichText::new(title).strong());
+                    ui.separator();
+                    ui.add_space(5.0);
+                    state.show(ui, events, close_action)
+                })
+                .inner
         } else {
-            window = window
-                .default_pos(content_rect.center() - egui::vec2(100.0, 50.0))
-                .movable(true);
-        }
-
-        // Track OK button or Enter press
-        let mut close_confirm = false;
-
-        // For CloseConfirm: need to render custom buttons and capture action
-        let is_close_confirm = matches!(
-            self.popup.state.as_ref(),
-            Some(PopupState::CloseConfirm { .. })
-        );
-
-        if is_close_confirm {
-            // Drop the mutable borrow on state before re-borrowing in the closure
-            let _ = self.popup.state.as_mut();
-
-            let mut chosen_action: Option<CloseAction> = None;
-
-            window.show(ctx, |ui| {
-                ui.label("This file has unsaved changes. What would you like to do?");
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
-                        chosen_action = Some(CloseAction::Save);
+            egui::Window::new(title)
+                .open(&mut is_open)
+                .collapsible(false)
+                .resizable(false)
+                .default_pos(ctx.content_rect().center() - egui::vec2(100.0, 50.0))
+                .movable(true)
+                .show(ctx, |ui| {
+                    if let Some(name) = target_name {
+                        ui.label(format!("File: {name}"));
+                        ui.add_space(3.0);
                     }
-                    if ui.button("Export...").clicked() {
-                        chosen_action = Some(CloseAction::Export);
-                    }
-                    if ui.button("Don't Save").clicked() {
-                        chosen_action = Some(CloseAction::DontSave);
-                    }
-                });
-            });
+                    state.show(ui, events, close_action)
+                })
+                .and_then(|response| response.inner)
+                .unwrap_or(PopupOutcome::Open)
+        };
 
-            if let Some(action) = chosen_action {
-                self.popup.close_action = Some(action);
-                close_confirm = true;
-            }
-        } else {
-            window.show(ctx, |ui| {
-                close_confirm = self
-                    .popup
-                    .state
-                    .as_mut()
-                    .is_some_and(|s| s.show(ui, &self.events));
-            });
-        }
+        let close = !is_open || outcome != PopupOutcome::Open || self.events.escape_pressed;
+        self.popup.active = !close;
 
-        self.popup.active = !close_confirm && is_open && !self.events.escape_pressed;
-
-        // If the window got closed this frame
-        if was_open && !self.popup.active {
+        if close {
             self.error = None;
 
-            if close_confirm {
-                // Take ownership of the state to run the confirm action
-                if let Some(state) = self.popup.state.take() {
-                    state.on_confirm(self);
-                }
+            // Take ownership of the state to run the confirm action
+            if outcome == PopupOutcome::Confirmed
+                && let Some(state) = self.popup.state.take()
+            {
+                state.on_confirm(self);
+                // Run the next frame right away to close the window after
+                // a confirmed quit
+                ctx.request_repaint();
             }
 
             self.popup.clear();

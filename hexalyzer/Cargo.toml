@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 rfd.workspace = true
+same-file.workspace = true
 intelhexlib.workspace = true
 # On Windows: use lightweight 'glow' (OpenGL) backend
 [target.'cfg(windows)'.dependencies]

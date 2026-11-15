@@ -64,8 +64,8 @@ pub struct HexSession {
     pub fingerprint: Fingerprint,
     /// Detected file format at load time
     pub file_kind: FileKind,
-    /// Scroll id that allows each tab to keep its own scroll position
-    pub scroll_id: usize,
+    /// Unique id of the session
+    pub id: usize,
 }
 
 pub struct HexViewerApp {
@@ -79,8 +79,8 @@ pub struct HexViewerApp {
     pub bytes_per_row: usize,
     /// Pop up handler
     pub popup: Popup,
-    /// Monotonically increasing counter for unique scroll IDs
-    pub(crate) next_scroll_id: usize,
+    /// Monotonically increasing counter for unique session IDs
+    pub(crate) next_session_id: usize,
     /// Whether the side panel is expanded or collapsed
     pub side_panel_expanded: bool,
 
@@ -95,6 +95,9 @@ pub struct HexViewerApp {
 
     /// Gap fill byte used when exporting to binary (0x00 or 0xFF)
     pub gap_fill: u8,
+
+    /// Set once the user has confirmed quitting with unsaved changes
+    pub(crate) quit_confirmed: bool,
 }
 
 impl Default for HexSession {
@@ -114,7 +117,7 @@ impl Default for HexSession {
             file_changed_on_disk: false,
             fingerprint: Fingerprint::default(),
             file_kind: FileKind::Unknown,
-            scroll_id: 0,
+            id: 0,
         }
     }
 }
@@ -173,16 +176,22 @@ impl Default for HexViewerApp {
             bytes_per_row: 16,
             popup: Popup::default(),
             converter: HexConverter::default(),
-            next_scroll_id: 1,
+            next_session_id: 1,
             side_panel_expanded: true,
             events: EventState::default(),
             error: None,
             gap_fill: 0x00,
+            quit_confirmed: false,
         }
     }
 }
 
 impl HexViewerApp {
+    /// Index of the session with the given `HexSession::id`, if it is still open
+    pub(crate) fn get_session_index(&self, id: usize) -> Option<usize> {
+        self.sessions.iter().position(|s| s.id == id)
+    }
+
     /// Get the currently active session, if any
     pub(crate) fn get_curr_session(&self) -> Option<&HexSession> {
         self.active_index.and_then(|i| self.sessions.get(i))

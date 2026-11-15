@@ -52,6 +52,10 @@ fn main() -> eframe::Result<()> {
 }
 
 impl eframe::App for HexViewerApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_close_request(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Clone the context to avoid holding an immutable borrow on `ui` while
         // also passing it mutably to panel methods. Context is an Arc internally,
@@ -70,7 +74,10 @@ impl eframe::App for HexViewerApp {
             // ctx.set_debug_on_hover(true);
         }
 
-        // Collect input events once per frame
+        // Collect input events once per frame.
+        // Must run before the shortcut handlers: they consume key events, and
+        // `collect_ui_events_ctx` needs those to drop text typed as part of a shortcut
+        // (e.g. the "c" of Alt+C would otherwise be typed into the selected byte).
         self.events = events::collect_ui_events_ctx(&ctx);
         self.handle_copy_shortcut(&ctx);
         self.handle_save_shortcut(&ctx);

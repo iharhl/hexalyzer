@@ -1,5 +1,5 @@
 use crate::IntelHexErrorKind;
-use regex::bytes::Regex;
+use regex::bytes::RegexBuilder;
 
 /// Slide window search for `BTreeMap<usize, Vec<u8>>`.
 /// Returns the starting addresses of all matches, sorted in ascending order.
@@ -38,7 +38,13 @@ pub fn search_regex<'a>(
     iter: impl Iterator<Item = (&'a usize, &'a Vec<u8>)>,
     pattern: &str,
 ) -> Result<Vec<usize>, IntelHexErrorKind> {
-    let re = Regex::new(pattern).map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
+    // Unicode mode off: the data is raw bytes, so `\xFF` matches the byte 0xFF (not the
+    // UTF-8 encoding of U+00FF). The `.` matches any byte, including 0x0A (newline).
+    let re = RegexBuilder::new(pattern)
+        .unicode(false)
+        .dot_matches_new_line(true)
+        .build()
+        .map_err(|err| IntelHexErrorKind::InvalidRegex(err.to_string()))?;
 
     let mut matches = Vec::new();
 
@@ -145,5 +151,17 @@ mod tests {
 
         // Assert: only non-empty matches, no hit at every byte
         assert_eq!(res, Ok(vec![0x12, 0x16]));
+    }
+
+    #[test]
+    fn test_search_regex_dot_matches_newline() {
+        // Arrange
+        let map: BTreeMap<usize, Vec<u8>> = BTreeMap::from([(0x10, b"xa\nb".to_vec())]);
+
+        // Act
+        let res = search_regex(map.iter(), "a.b");
+
+        // Assert
+        assert_eq!(res, Ok(vec![0x11]));
     }
 }

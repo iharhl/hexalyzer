@@ -79,15 +79,12 @@ impl HexViewerApp {
             if ui
                 .add_enabled(has_filepath, egui::Button::new("Reload"))
                 .clicked()
-                && let Some(session_id) = self.active_index
+                && let Some(index) = self.active_index
             {
-                if self.has_unsaved_changes(session_id) {
-                    self.popup.open(PopupState::CloseConfirm {
-                        session_id,
-                        reload_after: true,
-                    });
+                if self.has_unsaved_changes(index) {
+                    self.open_close_confirm(index, true);
                 } else {
-                    self.reload_file(session_id);
+                    self.reload_file(index);
                 }
             }
 
@@ -95,15 +92,12 @@ impl HexViewerApp {
             if ui
                 .add_enabled(has_file, egui::Button::new("Close file"))
                 .clicked()
-                && let Some(session_id) = self.active_index
+                && let Some(index) = self.active_index
             {
-                if self.has_unsaved_changes(session_id) {
-                    self.popup.open(PopupState::CloseConfirm {
-                        session_id,
-                        reload_after: false,
-                    });
+                if self.has_unsaved_changes(index) {
+                    self.open_close_confirm(index, false);
                 } else {
-                    self.close_file(session_id);
+                    self.close_file(index);
                 }
             }
         });
@@ -118,6 +112,9 @@ impl HexViewerApp {
     }
 
     fn edit_popup_items(&mut self, ui: &mut egui::Ui) {
+        // Edit popups are bound to the tab they are opened for
+        let curr_id = self.get_curr_session().map(|s| s.id);
+
         let has_file = self.get_curr_session().is_some();
         let has_data = self.get_curr_session().is_some_and(|s| s.ih.size != 0);
         let has_modifications = self
@@ -129,8 +126,10 @@ impl HexViewerApp {
             .add_enabled(has_data, egui::Button::new("Relocate..."))
             .clicked()
             && !self.popup.active
+            && let Some(id) = curr_id
         {
             self.popup.open(PopupState::ReAddr {
+                id,
                 addr: String::new(),
             });
         }
@@ -140,11 +139,13 @@ impl HexViewerApp {
             .add_enabled(has_data, egui::Button::new("Merge..."))
             .clicked()
             && !self.popup.active
+            && let Some(id) = curr_id
             && let Some(path) = rfd::FileDialog::new()
                 .set_title("Merge with File")
                 .pick_file()
         {
             self.popup.open(PopupState::Merge {
+                id,
                 path,
                 addr_curr: String::new(),
                 addr_merge: String::new(),
@@ -158,8 +159,10 @@ impl HexViewerApp {
             .add_enabled(has_file, egui::Button::new("Insert Range..."))
             .clicked()
             && !self.popup.active
+            && let Some(id) = curr_id
         {
             self.popup.open(PopupState::InsertRange {
+                id,
                 start: String::new(),
                 end: String::new(),
             });
@@ -170,8 +173,10 @@ impl HexViewerApp {
             .add_enabled(has_data, egui::Button::new("Remove Range..."))
             .clicked()
             && !self.popup.active
+            && let Some(id) = curr_id
         {
             self.popup.open(PopupState::RemoveRange {
+                id,
                 start: String::new(),
                 end: String::new(),
             });
