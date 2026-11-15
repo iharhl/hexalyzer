@@ -9,6 +9,7 @@ use crate::record::RecordType;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::path::PathBuf;
 
 /// New variants may be added in future versions
 #[derive(Debug)]
@@ -18,6 +19,7 @@ pub enum IntelHexError {
     CreateRecordError(IntelHexErrorKind),
     UpdateError(IntelHexErrorKind),
     SearchError(IntelHexErrorKind),
+    WriteError(IntelHexErrorKind),
     Io(io::Error),
 }
 
@@ -27,7 +29,8 @@ impl PartialEq for IntelHexError {
             (Self::ParseRecordError(a, la), Self::ParseRecordError(b, lb)) => a == b && la == lb,
             (Self::CreateRecordError(a), Self::CreateRecordError(b))
             | (Self::UpdateError(a), Self::UpdateError(b))
-            | (Self::SearchError(a), Self::SearchError(b)) => a == b,
+            | (Self::SearchError(a), Self::SearchError(b))
+            | (Self::WriteError(a), Self::WriteError(b)) => a == b,
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
             _ => false,
         }
@@ -59,6 +62,9 @@ impl fmt::Display for IntelHexError {
             }
             Self::SearchError(base_err) => {
                 write!(f, "Error encountered during search:\n{base_err}")
+            }
+            Self::WriteError(base_err) => {
+                write!(f, "Error encountered during file write:\n{base_err}")
             }
             Self::Io(err) => {
                 write!(f, "I/O error: {err}")
@@ -126,6 +132,12 @@ pub enum IntelHexErrorKind {
     MissingEndOfFile,
     /// Search pattern is not a valid regular expression
     InvalidRegex(String),
+    /// Safe (atomic) write impossible: the directory does not allow creating a temporary file
+    DirectoryNotWritable(PathBuf),
+    /// Safe (atomic) write impossible: the file has other hard links that would keep the old data
+    FileHasHardLinks(u64),
+    /// Target path is a symbolic link to a file that does not exist
+    BrokenSymlink(PathBuf),
 }
 
 impl fmt::Display for IntelHexErrorKind {
@@ -205,6 +217,28 @@ impl fmt::Display for IntelHexErrorKind {
             }
             Self::InvalidRegex(msg) => {
                 write!(f, "Invalid regular expression: {msg}")
+            }
+            Self::DirectoryNotWritable(dir) => {
+                write!(
+                    f,
+                    "Cannot save safely: folder '{}' is not writable (a temporary file \
+                     is created there first). Save to another location instead.",
+                    dir.display()
+                )
+            }
+            Self::FileHasHardLinks(count) => {
+                write!(
+                    f,
+                    "Cannot save safely: the file has {count} hard links and saving would \
+                     detach this one from the others. Save to another location instead."
+                )
+            }
+            Self::BrokenSymlink(target) => {
+                write!(
+                    f,
+                    "The file is a symbolic link to '{}', which does not exist",
+                    target.display()
+                )
             }
         }
     }
