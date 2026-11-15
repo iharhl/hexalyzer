@@ -331,8 +331,14 @@ impl HexSession {
         }
 
         if self.search.is_hit(addr) {
-            // If inside search results -> highlight (2nd prio)
-            ui.painter().rect_filled(widget.rect, 0.0, colors::GREEN);
+            // If inside search results -> highlight (2nd prio).
+            // The current result is brighter than the others.
+            let color = if self.search.is_current_hit(addr) {
+                colors::BRIGHT_GREEN
+            } else {
+                colors::GREEN
+            };
+            ui.painter().rect_filled(widget.rect, 0.0, color);
             return;
         }
 

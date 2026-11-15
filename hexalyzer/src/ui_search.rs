@@ -94,6 +94,13 @@ impl Search {
         let n = self.results.partition_point(|&start| start <= addr);
         n > 0 && addr < self.results[n - 1].saturating_add(self.length)
     }
+
+    /// Check if `addr` lies inside the current (active) search match
+    pub(crate) fn is_current_hit(&self, addr: usize) -> bool {
+        self.results
+            .get(self.idx)
+            .is_some_and(|&start| start <= addr && addr < start.saturating_add(self.length))
+    }
 }
 
 /// Accepted hex pattern formats, shown on hover

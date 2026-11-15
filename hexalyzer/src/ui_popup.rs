@@ -119,7 +119,7 @@ impl PopupState {
     ) -> PopupOutcome {
         match self {
             Self::Error(msg) => {
-                ui.label(msg.as_str());
+                ui.label(egui::RichText::new(msg.as_str()).size(14.0));
                 ui.add_space(10.0);
                 if ui.button(" OK ").clicked() {
                     PopupOutcome::Dismissed
@@ -513,13 +513,30 @@ impl HexViewerApp {
         let mut is_open = true;
 
         let outcome = if state.is_blocking() {
+            // Errors get a red border and a red title with an icon
+            let is_error = matches!(state, PopupState::Error(_));
+            let mut frame = egui::Frame::popup(&ctx.global_style());
+            if is_error {
+                frame = frame.stroke(egui::Stroke::new(1.5, colors::ERROR));
+            }
+
             // A modal blocks both the pointer and keyboard focus for everything below
             // it, so nothing behind the popup can be activated while it is open
             egui::Modal::new(egui::Id::unique("blocking_popup"))
                 .backdrop_color(colors::SHADOW)
+                .frame(frame)
                 .show(ctx, |ui| {
                     ui.set_max_width(MODAL_MAX_WIDTH);
-                    ui.label(egui::RichText::new(title).strong());
+                    if is_error {
+                        ui.label(
+                            egui::RichText::new(format!("⚠  {title}"))
+                                .color(colors::ERROR)
+                                .size(16.0)
+                                .strong(),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new(title).strong());
+                    }
                     ui.separator();
                     ui.add_space(5.0);
                     state.show(ui, events, close_action)

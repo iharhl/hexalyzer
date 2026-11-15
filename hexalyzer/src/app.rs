@@ -16,10 +16,12 @@ pub mod colors {
     pub const LIGHT_BLUE: Color32 = Color32::from_rgba_premultiplied(33, 81, 109, 20);
     pub const MUD: Color32 = Color32::from_rgba_premultiplied(54, 44, 19, 20);
     pub const GREEN: Color32 = Color32::from_rgba_premultiplied(35, 53, 38, 20);
+    pub const BRIGHT_GREEN: Color32 = Color32::from_rgba_premultiplied(50, 85, 55, 20);
     pub const GRAY_160: Color32 = Color32::from_gray(160);
     pub const GRAY_210: Color32 = Color32::from_gray(210);
     pub const SHADOW: Color32 = Color32::from_black_alpha(150);
     pub const WARNING: Color32 = Color32::from_rgb(160, 160, 16);
+    pub const ERROR: Color32 = Color32::from_rgb(230, 80, 80);
 }
 
 /// Side-panel action that an Enter press triggers
