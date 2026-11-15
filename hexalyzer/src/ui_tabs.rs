@@ -1,6 +1,5 @@
 use crate::app::HexViewerApp;
 use crate::ui_button;
-use crate::ui_popup::PopupState;
 use eframe::egui;
 
 impl HexViewerApp {
@@ -126,10 +125,7 @@ impl HexViewerApp {
                 // Handle closing tabs after the loop to avoid borrow checker issues
                 if let Some(i) = tab_to_close {
                     if self.has_unsaved_changes(i) {
-                        self.popup.open(PopupState::CloseConfirm {
-                            session_id: i,
-                            reload_after: false,
-                        });
+                        self.open_close_confirm(i, false);
                     } else {
                         self.close_file(i);
                     }

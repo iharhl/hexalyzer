@@ -217,9 +217,9 @@ impl HexViewerApp {
             }
         };
 
-        // Determine unique scroll widget id
-        let scroll_id = self.next_scroll_id;
-        self.next_scroll_id += 1;
+        // Determine unique session id
+        let id = self.next_session_id;
+        self.next_session_id += 1;
 
         let mut new_session = HexSession {
             name: path.file_name().map_or_else(
@@ -228,7 +228,7 @@ impl HexViewerApp {
             ),
             last_modified,
             file_kind,
-            scroll_id,
+            id,
             ..HexSession::default()
         };
 
@@ -245,9 +245,13 @@ impl HexViewerApp {
         self.active_index = Some(self.sessions.len() - 1);
     }
 
-    /// Close the file with the given ID. When the file is closed, switch to the first one.
-    pub(crate) fn close_file(&mut self, session_id: usize) {
-        self.sessions.remove(session_id);
+    /// Close the file at a given index. When the file is closed, switch to the first one.
+    /// Does nothing if the index is out of range.
+    pub(crate) fn close_file(&mut self, index: usize) {
+        if index >= self.sessions.len() {
+            return;
+        }
+        self.sessions.remove(index);
 
         if self.sessions.is_empty() {
             self.active_index = None;
@@ -256,17 +260,17 @@ impl HexViewerApp {
         }
     }
 
-    /// Returns `true` if the session has unsaved in-memory edits
-    pub(crate) fn has_unsaved_changes(&self, session_id: usize) -> bool {
+    /// Returns `true` if the session at the given index has unsaved in-memory edits
+    pub(crate) fn has_unsaved_changes(&self, index: usize) -> bool {
         self.sessions
-            .get(session_id)
+            .get(index)
             .is_some_and(HexSession::has_unsaved_changes)
     }
 
-    /// Reload the file from disk, replacing in-memory data.
+    /// Reload the file of the session at the given index from disk, replacing in-memory data.
     /// Resets editor state and updates the last-modified timestamp.
-    pub(crate) fn reload_file(&mut self, session_id: usize) {
-        let Some(session) = self.sessions.get(session_id) else {
+    pub(crate) fn reload_file(&mut self, index: usize) {
+        let Some(session) = self.sessions.get(index) else {
             return;
         };
 
@@ -292,7 +296,7 @@ impl HexViewerApp {
             }
         };
 
-        let Some(session) = self.sessions.get_mut(session_id) else {
+        let Some(session) = self.sessions.get_mut(index) else {
             return;
         };
 
@@ -427,14 +431,14 @@ impl HexViewerApp {
             return;
         }
 
-        let Some(session_id) = self.active_index else {
+        let Some(index) = self.active_index else {
             return;
         };
         let has_filepath = self
             .get_curr_session()
             .is_some_and(|s| !s.ih.filepath.as_os_str().is_empty());
 
-        if has_filepath && self.has_unsaved_changes(session_id) {
+        if has_filepath && self.has_unsaved_changes(index) {
             self.save_curr_session();
         }
     }
