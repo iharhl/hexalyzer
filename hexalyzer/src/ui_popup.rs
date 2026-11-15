@@ -47,18 +47,22 @@ pub enum PopupState {
     Error(String),
     About,
     ReAddr {
+        id: usize,
         addr: String,
     },
     Merge {
+        id: usize,
         path: PathBuf,
         addr_curr: String,
         addr_merge: String,
     },
     InsertRange {
+        id: usize,
         start: String,
         end: String,
     },
     RemoveRange {
+        id: usize,
         start: String,
         end: String,
     },
@@ -82,6 +86,17 @@ impl PopupState {
             Self::InsertRange { .. } => "Insert Range",
             Self::RemoveRange { .. } => "Remove Range",
             Self::CloseConfirm { .. } | Self::QuitConfirm { .. } => "Unsaved Changes",
+        }
+    }
+
+    /// ID of the session an edit popup acts on
+    const fn target_id(&self) -> Option<usize> {
+        match self {
+            Self::ReAddr { id, .. }
+            | Self::Merge { id, .. }
+            | Self::InsertRange { id, .. }
+            | Self::RemoveRange { id, .. } => Some(*id),
+            _ => None,
         }
     }
 
@@ -116,7 +131,7 @@ impl PopupState {
                 Self::show_about(ui);
                 PopupOutcome::Open
             }
-            Self::ReAddr { addr: address } => {
+            Self::ReAddr { addr: address, .. } => {
                 Self::show_hex_field(ui, "New start address:", address);
                 PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
             }
@@ -137,7 +152,7 @@ impl PopupState {
                 );
                 PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
             }
-            Self::InsertRange { start, end } | Self::RemoveRange { start, end } => {
+            Self::InsertRange { start, end, .. } | Self::RemoveRange { start, end, .. } => {
                 Self::show_hex_field(ui, "Start address:", start);
                 Self::show_hex_field(ui, "End address (inclusive):", end);
                 PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
@@ -253,8 +268,15 @@ impl PopupState {
 
     /// Execute the action for a confirmed popup
     fn on_confirm(self, app: &mut HexViewerApp) {
+        // Act on the tab the pop-up was opened for (might be different from active one)
+        if let Some(id) = self.target_id()
+            && !app.switch_to_session(id)
+        {
+            return;
+        }
+
         match self {
-            Self::ReAddr { addr: address } => {
+            Self::ReAddr { addr: address, .. } => {
                 let Some(addr) = usize::from_str_radix(&address, 16).ok() else {
                     app.error.replace("Invalid address format".to_string());
                     return;
@@ -277,7 +299,7 @@ impl PopupState {
 
                 curr_session.on_layout_changed();
             }
-            Self::InsertRange { start, end } => {
+            Self::InsertRange { start, end, .. } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
                 let end_addr = usize::from_str_radix(&end, 16).ok();
 
@@ -306,7 +328,7 @@ impl PopupState {
 
                 curr_session.on_layout_changed();
             }
-            Self::RemoveRange { start, end } => {
+            Self::RemoveRange { start, end, .. } => {
                 let start_addr = usize::from_str_radix(&start, 16).ok();
                 let end_addr = usize::from_str_radix(&end, 16).ok();
 
@@ -330,6 +352,7 @@ impl PopupState {
                 path,
                 addr_curr: addr_current,
                 addr_merge,
+                ..
             } => {
                 let addr1 = usize::from_str_radix(&addr_current, 16).ok();
                 let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
@@ -441,8 +464,34 @@ impl HexViewerApp {
         }
     }
 
+    /// Make the session with the given id the active one.
+    /// Returns `false` if there is no such session (e.g. tab was closed).
+    fn switch_to_session(&mut self, id: usize) -> bool {
+        let Some(index) = self.get_session_index(id) else {
+            return false;
+        };
+        self.active_index = Some(index);
+        true
+    }
+
     /// Show the pop-up
     pub(crate) fn show_popup(&mut self, ctx: &egui::Context) {
+        // Name of the file an edit popup acts on. Close the popup if its tab is gone.
+        let target_index = self
+            .popup
+            .state
+            .as_ref()
+            .and_then(PopupState::target_id)
+            .map(|id| self.get_session_index(id));
+        let target_name = match target_index {
+            Some(Some(index)) => Some(self.sessions[index].name.as_str()),
+            Some(None) => {
+                self.popup.clear();
+                return;
+            }
+            None => None,
+        };
+
         let Some(state) = self.popup.state.as_mut() else {
             self.popup.clear();
             return;
@@ -473,7 +522,13 @@ impl HexViewerApp {
                 .resizable(false)
                 .default_pos(ctx.content_rect().center() - egui::vec2(100.0, 50.0))
                 .movable(true)
-                .show(ctx, |ui| state.show(ui, events, close_action))
+                .show(ctx, |ui| {
+                    if let Some(name) = target_name {
+                        ui.label(format!("File: {name}"));
+                        ui.add_space(3.0);
+                    }
+                    state.show(ui, events, close_action)
+                })
                 .and_then(|response| response.inner)
                 .unwrap_or(PopupOutcome::Open)
         };
