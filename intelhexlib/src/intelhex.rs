@@ -1103,9 +1103,10 @@ impl IntelHex {
     pub fn update_range(&mut self, start_addr: usize, data: &[u8]) -> Result<(), IntelHexError> {
         let len = data.len();
 
-        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=start_addr).next_back() {
+        if let Some((&chunk_start, chunk_data)) = self.buffer.range_mut(..=start_addr).next_back()
+            && let Some(end_addr) = start_addr.checked_add(len)
+        {
             let chunk_end = chunk_start + chunk_data.len();
-            let end_addr = start_addr + len;
 
             // Check the entire range fits within a single chunk
             if start_addr >= chunk_start && end_addr <= chunk_end {
@@ -2580,6 +2581,32 @@ mod tests {
                 .take(3)
                 .collect::<Vec<_>>(),
             vec![Some(0x3), Some(0x4), None]
+        );
+    }
+
+    #[test]
+    fn test_update_range_near_usize_max() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        ih.buffer.insert(0x1000, vec![0x1, 0x2, 0x3, 0x4]);
+        ih.size = 4;
+
+        // Act & Assert - a range past the end of the address space is rejected, not a panic
+        assert_eq!(
+            ih.update_range(usize::MAX, &[0x0, 0x0]),
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(usize::MAX)
+            ))
+        );
+        assert_eq!(
+            ih.update_range(usize::MAX - 1, &[0x0, 0x0, 0x0]),
+            Err(IntelHexError::UpdateError(
+                IntelHexErrorKind::InvalidAddress(usize::MAX - 1)
+            ))
+        );
+        assert_eq!(
+            ih.buffer,
+            BTreeMap::from([(0x1000, vec![0x1, 0x2, 0x3, 0x4])])
         );
     }
 
