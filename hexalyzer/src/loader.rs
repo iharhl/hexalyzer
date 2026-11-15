@@ -28,14 +28,14 @@ fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
     let mut buf = Vec::new();
     File::open(path)?.take(DETECT_LEN).read_to_end(&mut buf)?;
 
-    // Empty file -> Unknown
-    if buf.is_empty() {
-        return Ok(FileKind::Unknown);
-    }
-
     // A known extension is detected
     if let Some(kind) = kind_from_extension(path) {
         return Ok(kind);
+    }
+
+    // Empty file -> consider as raw binary with no data
+    if buf.is_empty() {
+        return Ok(FileKind::Bin);
     }
 
     // ELF magic check

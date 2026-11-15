@@ -86,7 +86,7 @@ impl HexSession {
                 ui.vertical_centered(|ui| {
                     ui.add_space(ui.available_height() / 3.0);
                     ui.label(
-                        egui::RichText::new("No data records")
+                        egui::RichText::new("No data")
                             .color(egui::Color32::GRAY)
                             .monospace(),
                     );
