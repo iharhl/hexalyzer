@@ -47,7 +47,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Same lints as check.sh, but any warning fails the job
+      # Same lints as `./run.sh check`, but any warning fails the job
       - name: Run clippy
         run: >
           cargo clippy --workspace --all-targets --all-features --
