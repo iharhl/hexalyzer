@@ -70,7 +70,10 @@ impl eframe::App for HexViewerApp {
             // ctx.set_debug_on_hover(true);
         }
 
-        // Collect input events once per frame
+        // Collect input events once per frame.
+        // Must run before the shortcut handlers: they consume key events, and
+        // `collect_ui_events_ctx` needs those to drop text typed as part of a shortcut
+        // (e.g. the "c" of Alt+C would otherwise be typed into the selected byte).
         self.events = events::collect_ui_events_ctx(&ctx);
         self.handle_copy_shortcut(&ctx);
         self.handle_save_shortcut(&ctx);

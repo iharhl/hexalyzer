@@ -42,11 +42,22 @@ fn collect_inner(i: &egui::InputState, text_edit_focused: bool) -> EventState {
         ..Default::default()
     };
 
+    // Whether the last key press had a shortcut modifier held
+    let mut shortcut_key_pressed = false;
+
     for event in &i.events {
+        if let egui::Event::Key {
+            pressed: true,
+            modifiers,
+            ..
+        } = event
+        {
+            shortcut_key_pressed = modifiers.alt || modifiers.ctrl || modifiers.command;
+        }
+
         match event {
-            // Take hex chars from text input (not raw keys), so that shortcuts like
-            // Cmd+C never count as typing, even if Cmd is released before C
-            egui::Event::Text(text) => {
+            // Skip text typed with Alt / Ctrl / Cmd held
+            egui::Event::Text(text) if !shortcut_key_pressed => {
                 state
                     .hex_chars
                     .extend(text.chars().filter(char::is_ascii_hexdigit));
