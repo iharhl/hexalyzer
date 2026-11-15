@@ -18,7 +18,7 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use intelhexlib::IntelHex;
 use rand::rngs::StdRng;
-use rand::{Rng, RngCore, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use std::hint::black_box;
 use std::path::PathBuf;
 

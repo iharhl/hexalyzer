@@ -36,7 +36,6 @@ use eframe::egui;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        vsync: true,
         viewport: egui::ViewportBuilder::default()
             .with_icon(load_icon())
             .with_resizable(true)
@@ -120,7 +119,7 @@ impl eframe::App for HexViewerApp {
                 curr_session.show_central_panel(ui, self.bytes_per_row, &self.events);
             }
         } else {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.label("Drop a file or click '+' to start hexing!");
                 });

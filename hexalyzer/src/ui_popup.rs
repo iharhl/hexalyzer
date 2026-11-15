@@ -505,7 +505,7 @@ impl HexViewerApp {
         let outcome = if state.is_blocking() {
             // A modal blocks both the pointer and keyboard focus for everything below
             // it, so nothing behind the popup can be activated while it is open
-            egui::Modal::new(egui::Id::new("blocking_popup"))
+            egui::Modal::new(egui::Id::unique("blocking_popup"))
                 .backdrop_color(colors::SHADOW)
                 .show(ctx, |ui| {
                     ui.set_max_width(MODAL_MAX_WIDTH);

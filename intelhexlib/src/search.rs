@@ -60,7 +60,7 @@ pub fn search_regex<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
+    use rand::RngExt;
     use std::collections::BTreeMap;
 
     #[test]

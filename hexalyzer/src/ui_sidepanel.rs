@@ -20,7 +20,7 @@ impl HexViewerApp {
 
         egui::Panel::left("left_panel")
             .exact_size(280.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.add_space(3.0);
 
                 // Get the currently active session. If none active - use the dummy one

@@ -96,12 +96,9 @@ impl HexConverter {
     }
 
     fn show_input_rows(&mut self, ui: &mut egui::Ui) {
-        let row_width = ui.available_width();
         let label_w = 50.0;
-        let btn_w = 28.0;
         let row_h = ui.spacing().interact_size.y;
-        let spacing = ui.spacing().item_spacing.x;
-        let text_w = f32::mul_add(btn_w, -2.0, spacing.mul_add(-3.0, row_width - label_w));
+        let btn_size = egui::vec2(28.0, row_h);
         let copy_icon = "\u{1f4cb}";
         let convert_icon = ">>";
 
@@ -112,26 +109,28 @@ impl HexConverter {
                         [label_w, row_h],
                         egui::Label::new($label).halign(egui::Align::RIGHT),
                     );
-                    let resp = ui.add_sized(
-                        [text_w, row_h],
-                        egui::TextEdit::singleline($text).font(egui::TextStyle::Monospace),
-                    );
-                    if resp.changed() {
-                        $filter($text);
-                    }
-                    if ui
-                        .add_sized([btn_w, row_h], egui::Button::new(copy_icon))
-                        .on_hover_text("Copy")
-                        .clicked()
-                    {
-                        ui.ctx().copy_text($text.clone());
-                    }
-                    if ui
-                        .add_sized([btn_w, row_h], egui::Button::new(convert_icon))
-                        .clicked()
-                    {
-                        self.convert_from($field);
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(egui::Button::new(convert_icon).min_size(btn_size))
+                            .clicked()
+                        {
+                            self.convert_from($field);
+                        }
+                        if ui
+                            .add(egui::Button::new(copy_icon).min_size(btn_size))
+                            .on_hover_text("Copy")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text($text.clone());
+                        }
+                        let resp = ui.add_sized(
+                            [ui.available_width(), row_h],
+                            egui::TextEdit::singleline($text).font(egui::TextStyle::Monospace),
+                        );
+                        if resp.changed() {
+                            $filter($text);
+                        }
+                    });
                 });
             };
         }

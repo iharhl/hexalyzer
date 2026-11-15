@@ -6,7 +6,7 @@ use eframe::egui;
 impl HexViewerApp {
     /// Displays the top menu bar with File, Edit, View, and About buttons
     pub(crate) fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menubar").show_inside(ui, |ui| {
+        egui::Panel::top("menubar").show(ui, |ui| {
             ui.add_space(3.0);
 
             egui::MenuBar::new().ui(ui, |ui| {

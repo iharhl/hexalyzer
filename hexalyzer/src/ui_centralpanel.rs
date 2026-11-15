@@ -80,7 +80,7 @@ impl HexSession {
         bytes_per_row: usize,
         events: &EventState,
     ) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Show placeholder for empty files
             if self.ih.size == 0 {
                 ui.vertical_centered(|ui| {

@@ -12,13 +12,13 @@ same-file.workspace = true
 intelhexlib.workspace = true
 # On Windows: use lightweight 'glow' (OpenGL) backend
 [target.'cfg(windows)'.dependencies]
-eframe = { workspace = true, features = ["default_fonts", "glow"] }
+eframe = { workspace = true, features = ["default_fonts", "glow", "clipboard", "links"] }
 # On Mac/Linux: use 'default' features
 [target.'cfg(not(windows))'.dependencies]
 eframe = { workspace = true, features = ["default"] }
 
 [build-dependencies]
-winresource = "0.1.28"
+winresource = "0.1.34"
 
 [package.metadata.packager]
 product_name = "Hexalyzer"

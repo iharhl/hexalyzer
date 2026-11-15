@@ -205,6 +205,6 @@ impl HexSession {
                 follow_addr.map(|addr| ScrollTarget::Follow(self.get_row(addr, bytes_per_row)))
             });
 
-        StepScrollArea::new(egui::Id::new(self.id)).with_target(target)
+        StepScrollArea::new(egui::Id::unique(self.id)).with_target(target)
     }
 }

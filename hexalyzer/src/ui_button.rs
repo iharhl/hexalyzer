@@ -38,7 +38,7 @@ pub fn light_mono_button(
 #[allow(clippy::expect_used)]
 pub fn tab_style_button<R>(
     ui: &mut egui::Ui,
-    id_source: impl std::hash::Hash,
+    id_salt: impl egui::AsIdSalt,
     is_active: bool,
     fixed_width: f32,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
@@ -57,7 +57,7 @@ pub fn tab_style_button<R>(
     };
 
     // Create a unique ID for this tab's interaction
-    let id = ui.make_persistent_id(id_source);
+    let id = ui.make_persistent_id(id_salt);
 
     // Workaround to fix the tab hovering
     let mut tab_rect = ui.max_rect();

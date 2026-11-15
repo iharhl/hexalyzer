@@ -64,7 +64,7 @@ impl HexViewerApp {
     /// Tabs are constrained to fit into the available space.
     /// If the number of tabs does not exceed the maximum allowed, the "Open New File" tab is added.
     pub(crate) fn show_tabs(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("tabs_panel").show_inside(ui, |ui| {
+        egui::Panel::top("tabs_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Sidebar toggle button
                 let icon = if self.side_panel_expanded { "<<" } else { ">>" };
