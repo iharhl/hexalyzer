@@ -1689,7 +1689,7 @@ mod tests {
         let result: Vec<Option<u8>> = ih2.iter_range(0x00, 0).collect();
 
         // Assert: zero-length range yields nothing
-        assert!(result.is_empty());
+        assert_eq!(result, Vec::<Option<u8>>::new());
 
         // Act
         let result: Vec<Option<u8>> = ih2.iter_range(0x10, 4).collect();
