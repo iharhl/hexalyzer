@@ -100,8 +100,12 @@ impl HexSession {
             let display_end = align_up((*self.addr.end()).saturating_add(1));
             let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
-            // Get row height in pixels (depends on font size)
-            let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            // Get row height in pixels. A row is as tall as its tallest item: text,
+            // byte buttons, or the minimum height of a horizontal layout.
+            let row_height = ui
+                .text_style_height(&egui::TextStyle::Monospace)
+                .max(ui_button::BYTE_BUTTON_SIZE.y)
+                .max(ui.spacing().interact_size.y);
 
             // Move the cursor before creating the scroll area, so the view follows it this frame
             let cursor = self.handle_arrow_keys(&events.arrow_keys_pressed, bytes_per_row);
@@ -110,7 +114,7 @@ impl HexSession {
             // or the cursor was moved by the arrow keys.
             self.create_step_scroll(bytes_per_row, cursor).show_rows(
                 ui,
-                font_height,
+                row_height,
                 total_rows,
                 |ui, row_range| {
                     // Draw the main canvas with hex content
@@ -231,7 +235,7 @@ impl HexSession {
                 // Show byte as a button
                 let button = ui_button::light_mono_button(
                     ui,
-                    egui::Vec2::new(21.0, 18.0),
+                    ui_button::BYTE_BUTTON_SIZE,
                     display_value.as_str(),
                     bg_color,
                 );

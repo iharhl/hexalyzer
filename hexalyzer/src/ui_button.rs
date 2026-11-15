@@ -1,5 +1,8 @@
 use eframe::egui;
 
+/// Size of a byte button in the hex view
+pub const BYTE_BUTTON_SIZE: egui::Vec2 = egui::Vec2::new(21.0, 18.0);
+
 pub fn light_mono_button(
     ui: &mut egui::Ui,
     size: egui::Vec2,
