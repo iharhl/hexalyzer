@@ -5,7 +5,7 @@ use eframe::egui;
 use intelhexlib::IntelHex;
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileKind {
@@ -13,6 +13,13 @@ pub enum FileKind {
     Bin,
     Elf,
     Unknown,
+}
+
+/// Returns `true` if both paths point to the same file, even if spelled differently.
+/// Falls back to comparing the paths as-is when either file cannot be accessed
+/// (e.g. does not exist).
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    a == b || same_file::is_same_file(a, b).unwrap_or(false)
 }
 
 /// Get the last modified time of the file
@@ -53,7 +60,7 @@ fn detect_file_kind(path: &PathBuf) -> std::io::Result<FileKind> {
 }
 
 /// File kind named by the path extension, or `None` for other/no extension
-fn kind_from_extension(path: &std::path::Path) -> Option<FileKind> {
+fn kind_from_extension(path: &Path) -> Option<FileKind> {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -84,7 +91,7 @@ fn load_file_into_ih(path: &PathBuf) -> Result<(IntelHex, FileKind), String> {
 /// Write an `IntelHex` instance to a file in the given format
 pub fn write_ih_to_path(
     ih: &mut IntelHex,
-    path: &std::path::Path,
+    path: &Path,
     kind: &FileKind,
     gap_fill: u8,
 ) -> Result<(), String> {
@@ -186,7 +193,7 @@ fn confirm_overwrite_if_changed(path: &PathBuf, last_modified: std::time::System
 
 /// Ask the user to confirm overwriting a file that is open in another tab with
 /// unsaved changes. Returns `true` if the write should proceed.
-fn confirm_overwrite_unsaved_tab(path: &std::path::Path) -> bool {
+fn confirm_overwrite_unsaved_tab(path: &Path) -> bool {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -211,7 +218,11 @@ impl HexViewerApp {
     /// If the maximum number of tabs is reached, display an error message.
     pub(crate) fn load_file(&mut self, path: &PathBuf) {
         // Check if the file is already open
-        if let Some(index) = self.sessions.iter().position(|s| s.ih.filepath == *path) {
+        if let Some(index) = self
+            .sessions
+            .iter()
+            .position(|s| is_same_file(&s.ih.filepath, path))
+        {
             self.active_index = Some(index);
             return;
         }
@@ -408,7 +419,7 @@ impl HexViewerApp {
 
         // The file is open in another tab with unsaved changes
         let other_tab_unsaved = self.sessions.iter().enumerate().any(|(index, s)| {
-            index != curr_index && s.ih.filepath == path && s.has_unsaved_changes()
+            index != curr_index && s.has_unsaved_changes() && is_same_file(&s.ih.filepath, &path)
         });
         if other_tab_unsaved && !confirm_overwrite_unsaved_tab(&path) {
             return false;
@@ -427,7 +438,11 @@ impl HexViewerApp {
             return false;
         }
 
-        match self.sessions.iter().position(|s| s.ih.filepath == path) {
+        match self
+            .sessions
+            .iter()
+            .position(|s| is_same_file(&s.ih.filepath, &path))
+        {
             // Export over the current file itself is equivalent to a save
             Some(index) if index == curr_index => {
                 let session = &mut self.sessions[index];
@@ -573,5 +588,691 @@ impl HexViewerApp {
             .retain(|&addr, _| incoming_ih.read_byte(addr).is_none());
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Temporary directory, removed when dropped
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> std::io::Result<Self> {
+            let path = std::env::temp_dir()
+                .join(format!("hexalyzer_loader_{name}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path)?;
+            Ok(Self(path))
+        }
+
+        /// Create a file with the given content in this directory
+        fn file(&self, name: &str, data: &[u8]) -> std::io::Result<PathBuf> {
+            let path = self.0.join(name);
+            std::fs::write(&path, data)?;
+            Ok(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Build an `IntelHex` from `(start address, data)` chunks
+    fn ih_with(chunks: &[(usize, &[u8])]) -> Result<IntelHex, intelhexlib::IntelHexError> {
+        let mut ih = IntelHex::new();
+        for &(addr, data) in chunks {
+            ih.write_range(addr, addr + data.len() - 1)?;
+            ih.update_range(addr, data)?;
+        }
+        Ok(ih)
+    }
+
+    /// Minimal valid Intel HEX: 4 bytes `01 02 03 04` at address 0
+    const HEX_CONTENT: &[u8] = b":0400000001020304F2\n:00000001FF\n";
+
+    /// Start of an ELF file
+    const ELF_CONTENT: &[u8] = b"\x7FELF\x02\x01\x01";
+
+    // ============================ is_same_file ============================
+
+    #[test]
+    fn test_is_same_file_same_path() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("same_path")?;
+        let file = dir.file("a.bin", b"a")?;
+
+        // Act
+        let res = is_same_file(&file, &file);
+
+        // Assert
+        assert!(res);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_same_file_different_spelling() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("spelling")?;
+        let file = dir.file("a.bin", b"a")?;
+        std::fs::create_dir(dir.0.join("sub"))?;
+        let other = dir.0.join("sub").join("..").join("a.bin");
+
+        // Act
+        let res = is_same_file(&file, &other);
+
+        // Assert
+        assert_ne!(file, other);
+        assert!(res);
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_same_file_symlink() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("symlink")?;
+        let file = dir.file("a.bin", b"a")?;
+        let link = dir.0.join("link.bin");
+        std::os::unix::fs::symlink(&file, &link)?;
+
+        // Act
+        let res = is_same_file(&file, &link);
+
+        // Assert
+        assert!(res);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_same_file_different_files() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("different")?;
+        let a = dir.file("a.bin", b"a")?;
+        let b = dir.file("b.bin", b"a")?;
+
+        // Act
+        let res = is_same_file(&a, &b);
+
+        // Assert
+        assert!(!res);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_same_file_missing_same_path() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("missing_same")?;
+        let path = dir.0.join("a.bin");
+
+        // Act
+        let res = is_same_file(&path, &path);
+
+        // Assert: falls back to comparing the paths as-is
+        assert!(res);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_same_file_missing_different_paths() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("missing_different")?;
+        let a = dir.0.join("a.bin");
+        let b = dir.0.join("b.bin");
+
+        // Act
+        let res = is_same_file(&a, &b);
+
+        // Assert
+        assert!(!res);
+
+        Ok(())
+    }
+
+    // ========================= kind_from_extension ========================
+
+    #[test]
+    fn test_kind_from_extension_hex() {
+        // Arrange
+        let names = ["a.hex", "a.ihx", "a.ihex", "a.HEX", "a.IHex"];
+
+        // Act
+        let kinds = names.map(|name| kind_from_extension(Path::new(name)));
+
+        // Assert
+        assert_eq!(kinds, [const { Some(FileKind::Hex) }; 5]);
+    }
+
+    #[test]
+    fn test_kind_from_extension_bin() {
+        // Arrange
+        let names = ["a.bin", "a.BIN"];
+
+        // Act
+        let kinds = names.map(|name| kind_from_extension(Path::new(name)));
+
+        // Assert
+        assert_eq!(kinds, [const { Some(FileKind::Bin) }; 2]);
+    }
+
+    #[test]
+    fn test_kind_from_extension_unknown() {
+        // Arrange
+        let names = ["a", "a.elf", "a.txt", "a.hex.bak", ".hex"];
+
+        // Act
+        let kinds = names.map(|name| kind_from_extension(Path::new(name)));
+
+        // Assert
+        assert_eq!(kinds, [const { None }; 5]);
+    }
+
+    // ========================== detect_file_kind ==========================
+
+    #[test]
+    fn test_detect_file_kind_extension_wins_over_content() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_ext")?;
+        let path = dir.file("a.bin", HEX_CONTENT)?;
+
+        // Act
+        let kind = detect_file_kind(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Bin);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_file_kind_empty_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_empty")?;
+        let path = dir.file("empty", b"")?;
+
+        // Act
+        let kind = detect_file_kind(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Bin);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_file_kind_elf_content() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_elf")?;
+        let path = dir.file("firmware", ELF_CONTENT)?;
+
+        // Act
+        let kind = detect_file_kind(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Elf);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_file_kind_hex_content() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_hex")?;
+        let path = dir.file("firmware", HEX_CONTENT)?;
+
+        // Act
+        let kind = detect_file_kind(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Hex);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_file_kind_binary_content() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_bin")?;
+        let path = dir.file("firmware", &[0x00, 0x3A, 0xFF, 0x10])?;
+
+        // Act
+        let kind = detect_file_kind(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Bin);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_file_kind_missing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("detect_missing")?;
+        let path = dir.0.join("a.hex");
+
+        // Act
+        let res = detect_file_kind(&path);
+
+        // Assert
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    // ========================= load_file_into_ih ==========================
+
+    #[test]
+    fn test_load_file_into_ih_bin() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("load_bin")?;
+        let path = dir.file("a.bin", &[0xAA, 0xBB, 0xCC])?;
+
+        // Act
+        let (ih, kind) = load_file_into_ih(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Bin);
+        assert_eq!(ih.size, 3);
+        assert_eq!(ih.read_range(0, 3), Some(vec![0xAA, 0xBB, 0xCC]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_file_into_ih_hex() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("load_hex")?;
+        let path = dir.file("a.hex", HEX_CONTENT)?;
+
+        // Act
+        let (ih, kind) = load_file_into_ih(&path)?;
+
+        // Assert
+        assert_eq!(kind, FileKind::Hex);
+        assert_eq!(ih.read_range(0, 4), Some(vec![0x01, 0x02, 0x03, 0x04]));
+        assert_eq!(ih.filepath, path);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_file_into_ih_elf_not_supported() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("load_elf")?;
+        let path = dir.file("firmware", ELF_CONTENT)?;
+
+        // Act
+        let res = load_file_into_ih(&path);
+
+        // Assert
+        assert_eq!(
+            res.err(),
+            Some("ELF files are not yet supported".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_file_into_ih_invalid_hex() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("load_invalid_hex")?;
+        let path = dir.file("bad.hex", b":04000000010203FF\n")?;
+
+        // Act
+        let res = load_file_into_ih(&path);
+
+        // Assert
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_file_into_ih_missing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("load_missing")?;
+        let path = dir.0.join("missing.bin");
+
+        // Act
+        let res = load_file_into_ih(&path);
+
+        // Assert
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    // ========================== write_ih_to_path ==========================
+
+    #[test]
+    fn test_write_ih_to_path_hex() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("write_hex")?;
+        let path = dir.0.join("out.hex");
+        let mut ih = ih_with(&[(0x10, &[1, 2, 3]), (0x100, &[4, 5])])?;
+
+        // Act
+        write_ih_to_path(&mut ih, &path, &FileKind::Hex, 0x00)?;
+
+        // Assert: the written file loads back with the same data
+        let (loaded, kind) = load_file_into_ih(&path)?;
+        assert_eq!(kind, FileKind::Hex);
+        assert_eq!(
+            loaded.bytes().collect::<Vec<_>>(),
+            ih.bytes().collect::<Vec<_>>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_ih_to_path_bin_gap_fill() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("write_bin")?;
+        let path = dir.0.join("out.bin");
+        let mut ih = ih_with(&[(0x10, &[1, 2]), (0x14, &[3])])?;
+
+        // Act
+        write_ih_to_path(&mut ih, &path, &FileKind::Bin, 0xFF)?;
+
+        // Assert
+        assert_eq!(std::fs::read(&path)?, vec![1, 2, 0xFF, 0xFF, 3]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_ih_to_path_elf_not_supported() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("write_elf")?;
+        let path = dir.0.join("out.elf");
+        let mut ih = ih_with(&[(0, &[1])])?;
+
+        // Act
+        let res = write_ih_to_path(&mut ih, &path, &FileKind::Elf, 0x00);
+
+        // Assert
+        assert!(res.is_err());
+        assert!(!path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_ih_to_path_unknown_kind() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("write_unknown")?;
+        let path = dir.0.join("out");
+        let mut ih = ih_with(&[(0, &[1])])?;
+
+        // Act
+        let res = write_ih_to_path(&mut ih, &path, &FileKind::Unknown, 0x00);
+
+        // Assert
+        assert!(res.is_err());
+        assert!(!path.exists());
+
+        Ok(())
+    }
+
+    // ========================= bin_gap_fill_size ==========================
+
+    #[test]
+    fn test_bin_gap_fill_size_empty() {
+        // Arrange
+        let ih = IntelHex::new();
+
+        // Act
+        let size = bin_gap_fill_size(&ih);
+
+        // Assert
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_bin_gap_fill_size_contiguous() -> TestResult {
+        // Arrange
+        let ih = ih_with(&[(0x10, &[1, 2, 3])])?;
+
+        // Act
+        let size = bin_gap_fill_size(&ih);
+
+        // Assert
+        assert_eq!(size, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bin_gap_fill_size_with_gap() -> TestResult {
+        // Arrange: data at 0x10..=0x11 and 0x20 -> gap 0x12..=0x1F
+        let ih = ih_with(&[(0x10, &[1, 2]), (0x20, &[3])])?;
+
+        // Act
+        let size = bin_gap_fill_size(&ih);
+
+        // Assert
+        assert_eq!(size, 0x0E);
+
+        Ok(())
+    }
+
+    // ============================ format_size =============================
+
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    const GIB: usize = 1024 * MIB;
+    const TIB: usize = 1024 * GIB;
+
+    #[test]
+    fn test_format_size_bytes() {
+        // Arrange
+        let sizes = [0, 1, KIB - 1];
+
+        // Act
+        let formatted = sizes.map(format_size);
+
+        // Assert
+        assert_eq!(formatted, ["0 B", "1 B", "1023 B"]);
+    }
+
+    #[test]
+    fn test_format_size_units() {
+        // Arrange
+        let sizes = [KIB, KIB + KIB / 2, MIB, 64 * MIB, 4 * GIB, TIB];
+
+        // Act
+        let formatted = sizes.map(format_size);
+
+        // Assert
+        assert_eq!(
+            formatted,
+            [
+                "1.0 KiB", "1.5 KiB", "1.0 MiB", "64.0 MiB", "4.0 GiB", "1.0 TiB"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_format_size_rounds_down() {
+        // Arrange
+        let sizes = [2 * KIB - 1, MIB - 1];
+
+        // Act
+        let formatted = sizes.map(format_size);
+
+        // Assert
+        assert_eq!(formatted, ["1.9 KiB", "1023.9 KiB"]);
+    }
+
+    #[test]
+    fn test_format_size_tib_is_largest_unit() {
+        // Arrange
+        let sizes = [2048 * TIB, usize::MAX];
+
+        // Act
+        let formatted = sizes.map(format_size);
+
+        // Assert
+        assert_eq!(formatted, ["2048.0 TiB", "16777215.9 TiB"]);
+    }
+
+    // ========================= get_last_modified ==========================
+
+    #[test]
+    fn test_get_last_modified_existing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("last_modified")?;
+        let path = dir.file("a.bin", b"a")?;
+
+        // Act
+        let res = get_last_modified(&path);
+
+        // Assert
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_last_modified_missing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("last_modified_missing")?;
+        let path = dir.0.join("missing.bin");
+
+        // Act
+        let res = get_last_modified(&path);
+
+        // Assert
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    // ========================== changed_on_disk ===========================
+
+    #[test]
+    fn test_changed_on_disk_unchanged() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("changed_unchanged")?;
+        let path = dir.file("a.bin", b"a")?;
+        let loaded_at = get_last_modified(&path)?;
+
+        // Act
+        let changed = changed_on_disk(&path, loaded_at);
+
+        // Assert
+        assert!(!changed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_changed_on_disk_modified_later() -> TestResult {
+        // Arrange: another program writes the file after it was loaded
+        let dir = TempDir::new("changed_later")?;
+        let path = dir.file("a.bin", b"a")?;
+        let loaded_at = get_last_modified(&path)?;
+        File::options()
+            .write(true)
+            .open(&path)?
+            .set_modified(loaded_at + Duration::from_secs(10))?;
+
+        // Act
+        let changed = changed_on_disk(&path, loaded_at);
+
+        // Assert
+        assert!(changed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_changed_on_disk_missing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("changed_missing")?;
+        let path = dir.0.join("a.bin");
+
+        // Act
+        let changed = changed_on_disk(&path, SystemTime::now());
+
+        // Assert: a deleted file is not reported as changed
+        assert!(!changed);
+
+        Ok(())
+    }
+
+    // ================= confirm_* (paths without a dialog) =================
+
+    #[test]
+    fn test_confirm_large_write_hex_never_asks() -> TestResult {
+        // Arrange: HEX files have no gap fill, however sparse the data is
+        let ih = ih_with(&[(0, &[1]), (2 * LARGE_GAP_FILL_SIZE, &[2])])?;
+
+        // Act
+        let confirmed = confirm_large_write(&ih, &FileKind::Hex);
+
+        // Assert
+        assert!(confirmed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_large_write_small_gap_fill() -> TestResult {
+        // Arrange
+        let ih = ih_with(&[(0, &[1]), (LARGE_GAP_FILL_SIZE - 1, &[2])])?;
+
+        // Act
+        let confirmed = confirm_large_write(&ih, &FileKind::Bin);
+
+        // Assert
+        assert!(bin_gap_fill_size(&ih) < LARGE_GAP_FILL_SIZE);
+        assert!(confirmed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_overwrite_if_changed_unchanged_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("confirm_unchanged")?;
+        let path = dir.file("a.bin", b"a")?;
+        let loaded_at = get_last_modified(&path)?;
+
+        // Act
+        let confirmed = confirm_overwrite_if_changed(&path, loaded_at);
+
+        // Assert
+        assert!(confirmed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_confirm_overwrite_if_changed_missing_file() -> TestResult {
+        // Arrange
+        let dir = TempDir::new("confirm_missing")?;
+        let path = dir.0.join("missing.bin");
+
+        // Act
+        let confirmed = confirm_overwrite_if_changed(&path, SystemTime::now());
+
+        // Assert: a deleted file can be written again without asking
+        assert!(confirmed);
+
+        Ok(())
     }
 }
