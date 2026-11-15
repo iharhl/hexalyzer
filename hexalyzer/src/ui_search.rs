@@ -62,6 +62,11 @@ impl Search {
 
     /// Redo the last search
     pub(crate) fn redo(&mut self) {
+        // Nothing was searched yet -> keep the text box and mode as they are
+        if self.last == SearchState::default() {
+            return;
+        }
+
         // In case the current input field is not valid
         self.current = self.last.clone();
 

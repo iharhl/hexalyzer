@@ -184,6 +184,27 @@ fn confirm_overwrite_if_changed(path: &PathBuf, last_modified: std::time::System
     matches!(result, rfd::MessageDialogResult::Ok)
 }
 
+/// Ask the user to confirm overwriting a file that is open in another tab with
+/// unsaved changes. Returns `true` if the write should proceed.
+fn confirm_overwrite_unsaved_tab(path: &std::path::Path) -> bool {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Unsaved changes")
+        .set_description(format!(
+            "\"{name}\" is open in another tab with unsaved changes.\n\n\
+             Overwrite it? The changes in that tab will be lost."
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show();
+
+    matches!(result, rfd::MessageDialogResult::Ok)
+}
+
 impl HexViewerApp {
     /// Load hex file from disk and add it to the list of opened sessions.
     /// If the file is already open, switch to it.
@@ -385,6 +406,14 @@ impl HexViewerApp {
         let gap_fill = self.gap_fill;
         let kind = kind_from_extension(&path).unwrap_or(FileKind::Bin);
 
+        // The file is open in another tab with unsaved changes
+        let other_tab_unsaved = self.sessions.iter().enumerate().any(|(index, s)| {
+            index != curr_index && s.ih.filepath == path && s.has_unsaved_changes()
+        });
+        if other_tab_unsaved && !confirm_overwrite_unsaved_tab(&path) {
+            return false;
+        }
+
         let Some(session) = self.get_curr_session_mut() else {
             return false;
         };
@@ -413,8 +442,9 @@ impl HexViewerApp {
                 self.reload_file(index);
                 self.active_index = Some(index);
             }
-            // Open exported copy in a new tab and switch to it
-            None => self.load_file(&path),
+            // Open exported copy in a new tab and switch to it (if there is room for it)
+            None if self.sessions.len() < self.max_tabs => self.load_file(&path),
+            None => {}
         }
 
         true
