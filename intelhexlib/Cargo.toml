@@ -3,6 +3,9 @@ name = "intelhexlib"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [lib]
 name = "intelhexlib"

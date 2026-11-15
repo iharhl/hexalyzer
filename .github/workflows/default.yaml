@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  # Lets release.yaml run the same checks before building
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Headers needed to build the GUI (eframe / winit / rfd) on Linux
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Same lints as `./run.sh check`, but any warning fails the job
+      - name: Run clippy
+        run: >
+          cargo clippy --workspace --all-targets --all-features --
+          -D warnings
+          -W clippy::all
+          -W clippy::pedantic
+          -W clippy::nursery
+          -W clippy::unwrap_used
+          -W clippy::expect_used
+          -W clippy::panic
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Headers needed to build the GUI (eframe / winit / rfd) on Linux
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Unit, integration, CLI and doc tests of both crates
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+      # Only checks the benchmarks compile
+      - name: Build benchmarks
+        if: runner.os == 'Linux'
+        run: cargo build -p intelhexlib --benches --features benchmarking

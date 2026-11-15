@@ -350,7 +350,7 @@ fn bench_edit(c: &mut Criterion) {
         let updates: Vec<(usize, u8)> = (0..4096)
             .map(|_| (rng.random_range(0..size), rng.random()))
             .collect();
-        let mut ih_upd = ih_a.clone();
+        let mut ih_upd = ih_a;
 
         // Throughput here is updates per second, not bytes
         group.throughput(Throughput::Elements(updates.len() as u64));

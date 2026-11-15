@@ -27,16 +27,24 @@ macOS. Linux was not tested but should work too.
 To build the CLI tool, run
 `cargo build -p intelhexlib --features cli --release`
 
-When the tag is available, the installers and CLI will be attached.
+Prebuilt installers and the CLI for macOS and Windows are attached to each
+[release](https://github.com/iharhl/hexalyzer/releases).
+
+### Notes for Linux
+
+Building the GUI requires the X11 / Wayland development headers. On Debian / Ubuntu:
+
+```
+sudo apt-get install libxkbcommon-dev libwayland-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
 
 ### Notes for Windows
 
-I had bunch of issues with generating Windows installer and the
-final executable correctly. Before building, you need to run 
-`cargo add --build winresource` which helps setup the icon on the
-executable.
+The executable icon is embedded at build time by the `winresource` build dependency,
+so no extra setup is needed.
 
-In addition, if you want to install the app in certain folders, e.g.,
+If you want to install the app in certain folders, e.g.,
 `C:\Program Files\Hexalyzer`, you need to run the installer with
 admin rights, the same goes for uninstalling.
 
@@ -117,7 +125,7 @@ integration into other projects.
 ### Usage Example
 
 ```rust
-use hexalyzer::intelhex::IntelHex;
+use intelhexlib::IntelHex;
 use std::path::PathBuf;
 
 fn main() {
@@ -128,7 +136,7 @@ fn main() {
         
         // Access data at a specific address
         let address: usize = 0x0800_0000;
-        if let Some(byte) = ih.get_byte(address) {
+        if let Some(byte) = ih.read_byte(address) {
             println!("Byte at {:X}: {:02X}", address, byte);
         }
 
@@ -158,7 +166,7 @@ A CLI tool `hexcli` is also available for parsing and editing Intel HEX files.
 Its functionality includes:
 - Getting info about a file.
 - Relocating the file to a new start address.
-- Converting a file to between BIN and HEX formats.
+- Converting a file between BIN and HEX formats.
 - Merging multiple files into a single one (mixing BIN and HEX files is allowed).
 
 ```
@@ -170,7 +178,7 @@ Usage:
   hexcli info <input>
   hexcli relocate <input> <output> [options]
   hexcli convert <input> <output> [options]
-  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr]
+  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr] [options]
 
 Options:
   --address <val>    Base address for relocate / convert from BIN to HEX
@@ -182,6 +190,25 @@ Examples:
   hexcli convert firmware.hex firmware.bin --gap-fill 0x00
   hexcli merge final.hex firmware1.hex firmware2.bin:0xFF00
 ```
+
+
+## Development
+
+The repository is a Cargo workspace with two crates: `hexalyzer` (GUI app) and
+`intelhexlib` (library and `hexcli` tool).
+
+Common tasks are run through `run.sh`:
+- `./run.sh check`: format the code and run clippy with strict lints.
+- `./run.sh test`: run CLI, doc, unit and integration tests, with a coverage report
+  (requires [cargo-llvm-cov](https://crates.io/crates/cargo-llvm-cov)).
+- `./run.sh bench`: run the `intelhexlib` benchmarks.
+
+Every pull request is checked by GitHub Actions: formatting, clippy (warnings fail the build)
+and the full test suite on Linux, macOS and Windows.
+
+To make a release, bump the version in both `Cargo.toml` files and push a matching tag.
+The release workflow runs the checks, builds the macOS and Windows installers and CLI,
+and attaches them as ZIPs to a draft GitHub release, ready for release notes and publishing.
 
 
 ## History

@@ -411,10 +411,9 @@ impl ParsedArgs {
 
     /// Error if more than `max` positional arguments were given.
     fn reject_extra_positional(&self, max: usize) -> Result<(), String> {
-        match self.positional.get(max) {
-            Some(extra) => Err(format!("Unexpected argument '{extra}'")),
-            None => Ok(()),
-        }
+        self.positional.get(max).map_or(Ok(()), |extra| {
+            Err(format!("Unexpected argument '{extra}'"))
+        })
     }
 }
 

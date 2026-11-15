@@ -101,7 +101,7 @@ impl HexConverter {
         let btn_w = 28.0;
         let row_h = ui.spacing().interact_size.y;
         let spacing = ui.spacing().item_spacing.x;
-        let text_w = spacing.mul_add(-3.0, row_width - label_w) - btn_w * 2.0;
+        let text_w = f32::mul_add(btn_w, -2.0, spacing.mul_add(-3.0, row_width - label_w));
         let copy_icon = "\u{1f4cb}";
         let convert_icon = ">>";
 
