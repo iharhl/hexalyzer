@@ -272,6 +272,9 @@ impl HexViewerApp {
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("View", |ui| {
+            ui.checkbox(&mut self.side_panel_expanded, "Show Sidebar");
+            ui.separator();
+
             ui.label("Select Bytes per Row:");
             ui.add_space(3.0);
             ui.radio_value(&mut self.bytes_per_row, 16, "16 bytes");

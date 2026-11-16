@@ -76,7 +76,7 @@ tools:
 - `Open file`: Browse your system to load a file into a new tab.
 - `Save` (`Cmd+S` / `Ctrl+S`): Overwrite the current file with your changes (in its original format).
 - `Export`: Save a copy of your current session to a new file (format chosen by extension) and open it in a new tab.
-- `Gap Fill`: Setting for export to BIN to fill gaps with specific bytes.
+- `Gap Fill`: Byte (hex, default `FF`) used to fill address gaps when exporting to BIN.
 - `Reload`: Reload the current file from disk.
 - `Close file`: Close the current tab.
 
@@ -92,7 +92,8 @@ addresses can be specified for both files.
 
 #### View
 
-Switch between displaying 16 or 32 bytes per row.
+- Toggle side panel (can also be done by dragging or double-clicking the edge).
+- Switch between displaying 16 or 32 bytes per row.
 
 #### Tools
 

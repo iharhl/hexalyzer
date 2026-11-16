@@ -14,11 +14,23 @@ const CLOSE_SIZE: f32 = 16.0;
 const TAB_SPACING: f32 = 2.0;
 /// Corner radius of a tab and the close button hover background
 const TAB_CORNER_RADIUS: f32 = 4.0;
-/// Width of the space left for the name in the narrowest tab (enough for a letter and "...")
+/// Width of the space left for the name in the narrowest tab (enough for "...")
 const MIN_NAME_WIDTH: f32 = 16.0;
 /// Narrowest tab width
 const TAB_MIN_WIDTH: f32 =
     TAB_PADDING_X + TAB_PADDING_X + MIN_NAME_WIDTH + NAME_CLOSE_GAP + CLOSE_SIZE;
+
+/// Horizontal margin of the panel holding the tabs (egui's default for top panels)
+const PANEL_MARGIN_X: f32 = 8.0;
+
+/// Narrowest width of the tab row (incl. its margins) with `max_tabs` tabs open
+#[allow(clippy::cast_precision_loss)]
+pub fn min_row_width(max_tabs: usize) -> f32 {
+    let tabs = max_tabs as f32;
+    let spacing = TAB_SPACING * max_tabs.saturating_sub(1) as f32;
+    let margins = 2.0 * PANEL_MARGIN_X;
+    tabs.mul_add(TAB_MIN_WIDTH, spacing + margins)
+}
 
 /// What the user did with a tab this frame
 struct TabResponse {
@@ -159,6 +171,14 @@ fn show_tab(
         egui::Vec2::splat(CLOSE_SIZE),
     );
     let close = ui.interact(close_rect, id.with("close"), egui::Sense::click());
+
+    // Name the painted widgets for accessibility (screen readers, UI tests)
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::accesskit::Role::Tab, true, is_active, name)
+    });
+    close.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, format!("Close {name}"))
+    });
 
     let visuals = ui.visuals();
     let (fill, text_color) = if is_active {

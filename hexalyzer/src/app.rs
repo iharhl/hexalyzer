@@ -10,6 +10,9 @@ use crate::ui_search::Search;
 use intelhexlib::IntelHex;
 use std::ops::RangeInclusive;
 
+/// Smallest window size (the side panel collapsed): fits the hex bytes of a 16-byte row
+pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 320.0];
+
 pub mod colors {
     use eframe::egui::Color32;
 
@@ -76,6 +79,8 @@ pub struct HexViewerApp {
     pub(crate) next_session_id: usize,
     /// Whether the side panel is expanded or collapsed
     pub side_panel_expanded: bool,
+    /// Side panel state the minimum window width was last set for
+    pub(crate) min_width_set_for: Option<bool>,
 
     /// Hex/Dec/Bin/ASCII converter tool
     pub converter: HexConverter,
@@ -170,6 +175,7 @@ impl Default for HexViewerApp {
             converter: HexConverter::default(),
             next_session_id: 1,
             side_panel_expanded: true,
+            min_width_set_for: None,
             events: EventState::default(),
             error: None,
             gap_fill: 0xFF,

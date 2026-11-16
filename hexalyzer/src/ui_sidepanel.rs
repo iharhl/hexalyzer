@@ -1,6 +1,7 @@
-use crate::app::{HexSession, HexViewerApp, colors};
+use crate::app::{HexSession, HexViewerApp, MIN_WINDOW_SIZE, colors};
 use crate::loader::get_last_modified;
 use crate::ui_inspector::format_with_separators;
+use crate::ui_tabs;
 use eframe::egui;
 
 /// Width of the open side panel (incl margins)
@@ -71,6 +72,27 @@ impl HexViewerApp {
         .inner;
 
         self.side_panel_expanded = expanded || strip_clicked;
+        self.update_min_window_width(ui.ctx());
+    }
+
+    /// Keep the hex bytes of a 16-byte row (and all tabs) in view next to the
+    /// open side panel
+    fn update_min_window_width(&mut self, ctx: &egui::Context) {
+        let expanded = self.side_panel_expanded;
+        if self.min_width_set_for == Some(expanded) {
+            return;
+        }
+        self.min_width_set_for = Some(expanded);
+
+        let [mut min_width, min_height] = MIN_WINDOW_SIZE;
+        if expanded {
+            let hex_view = min_width + EXPANDED_WIDTH - COLLAPSED_WIDTH;
+            let tabs = EXPANDED_WIDTH + ui_tabs::min_row_width(self.max_tabs);
+            min_width = hex_view.max(tabs);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+            min_width, min_height,
+        )));
     }
 
     /// Show contents of the open side panel

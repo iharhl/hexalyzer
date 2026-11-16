@@ -41,7 +41,7 @@ fn main() -> eframe::Result<()> {
             .with_icon(load_icon())
             .with_resizable(true)
             .with_inner_size([960.0, 720.0])
-            .with_min_inner_size([480.0, 320.0]),
+            .with_min_inner_size(app::MIN_WINDOW_SIZE),
         ..Default::default()
     };
     eframe::run_native(
