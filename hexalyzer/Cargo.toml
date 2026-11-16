@@ -10,6 +10,9 @@ repository.workspace = true
 rfd.workspace = true
 same-file.workspace = true
 intelhexlib.workspace = true
+# Bundle the emoji fonts (e.g. for the error icon): egui doesn't include them by default
+# and Windows has no system font fallback
+egui = { workspace = true, features = ["monochrome_emoji_fonts"] }
 # On Windows: use lightweight 'glow' (OpenGL) backend
 [target.'cfg(windows)'.dependencies]
 eframe = { workspace = true, features = ["default_fonts", "glow", "clipboard", "links"] }

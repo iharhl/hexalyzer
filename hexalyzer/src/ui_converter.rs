@@ -99,7 +99,7 @@ impl HexConverter {
         let label_w = 50.0;
         let row_h = ui.spacing().interact_size.y;
         let btn_size = egui::vec2(28.0, row_h);
-        let copy_icon = "\u{1f4cb}";
+        let copy_icon = "\u{1f5d0}";
         let convert_icon = ">>";
 
         macro_rules! input_row {
