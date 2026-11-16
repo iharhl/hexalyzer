@@ -1,3 +1,4 @@
+use crate::hex_input::sanitize_hex_input;
 use eframe::egui;
 
 /// Which field to convert from
@@ -135,9 +136,7 @@ impl HexConverter {
             };
         }
 
-        input_row!("Hex:", Field::Hex, &mut self.hex, |s: &mut String| {
-            s.retain(|c| c.is_ascii_hexdigit());
-        });
+        input_row!("Hex:", Field::Hex, &mut self.hex, sanitize_hex_input);
         input_row!("Dec:", Field::Dec, &mut self.dec, |s: &mut String| {
             let has_minus = s.starts_with('-');
             s.retain(|c| c.is_ascii_digit());

@@ -1,4 +1,5 @@
 use crate::app::{HexSession, colors};
+use crate::hex_input::parse_hex_pattern;
 use eframe::egui;
 
 #[derive(Default, PartialEq, Clone)]
@@ -116,7 +117,7 @@ impl HexSession {
         // Search if pattern is valid
         let valid = match self.search.current.mode {
             SearchMode::Hex => {
-                if let Some(pattern) = parse_str_into_bytes(input) {
+                if let Some(pattern) = parse_hex_pattern(input) {
                     self.search.results = self.ih.search_bytes(&pattern);
                     self.search.length = pattern.len();
                     true
@@ -251,44 +252,4 @@ impl HexSession {
 
         ui.label(label_text);
     }
-}
-
-/// Parse a hex byte pattern.
-///
-/// Groups of digits may be separated by whitespace or commas, and each group may have
-/// a `0x` / `0X` prefix, e.g. `0A1B`, `0A 1B`, `0x0A1B` or `0x0A, 0x1B`. A group must
-/// have an even number of digits, except a single digit, which is one byte (`0xA` = `0A`).
-///
-/// Returns `None` if the input is not a valid pattern.
-fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
-    let mut bytes = Vec::new();
-
-    let groups = s
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|g| !g.is_empty());
-
-    for group in groups {
-        let digits = group
-            .strip_prefix("0x")
-            .or_else(|| group.strip_prefix("0X"))
-            .unwrap_or(group);
-
-        // Only ASCII hex digits
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-
-        match digits.len() {
-            1 => bytes.push(u8::from_str_radix(digits, 16).ok()?),
-            len if len.is_multiple_of(2) => {
-                for i in (0..len).step_by(2) {
-                    bytes.push(u8::from_str_radix(&digits[i..i + 2], 16).ok()?);
-                }
-            }
-            // Ambiguous, e.g. ABC could be 0A BC or AB 0C
-            _ => return None,
-        }
-    }
-
-    Some(bytes)
 }

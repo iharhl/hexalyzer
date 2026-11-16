@@ -1,5 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::colors;
+use crate::hex_input::{parse_hex_addr, sanitize_hex_input};
 use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
@@ -257,18 +258,8 @@ impl PopupState {
                 );
 
                 if response.changed() {
-                    // Drop a pasted `0x` prefix (already shown as the label) before filtering,
-                    // so its `0` doesn't take up one of the 8 digits
-                    let input = value.trim_start();
-                    let input = input
-                        .strip_prefix("0x")
-                        .or_else(|| input.strip_prefix("0X"))
-                        .unwrap_or(input);
-                    *value = input
-                        .chars()
-                        .filter(char::is_ascii_hexdigit)
-                        .take(8)
-                        .collect();
+                    sanitize_hex_input(value);
+                    value.truncate(8);
                 }
 
                 // A single-line field gives up focus on Enter
@@ -291,7 +282,7 @@ impl PopupState {
 
         match self {
             Self::ReAddr { addr: address, .. } => {
-                let Some(addr) = usize::from_str_radix(&address, 16).ok() else {
+                let Some(addr) = parse_hex_addr(&address) else {
                     app.error.replace("Invalid address format".to_string());
                     return;
                 };
@@ -314,8 +305,8 @@ impl PopupState {
                 curr_session.on_layout_changed();
             }
             Self::InsertRange { start, end, .. } => {
-                let start_addr = usize::from_str_radix(&start, 16).ok();
-                let end_addr = usize::from_str_radix(&end, 16).ok();
+                let start_addr = parse_hex_addr(&start);
+                let end_addr = parse_hex_addr(&end);
 
                 let Some((start, end)) = start_addr.zip(end_addr) else {
                     app.error.replace("Invalid address format".to_string());
@@ -343,8 +334,8 @@ impl PopupState {
                 curr_session.on_layout_changed();
             }
             Self::RemoveRange { start, end, .. } => {
-                let start_addr = usize::from_str_radix(&start, 16).ok();
-                let end_addr = usize::from_str_radix(&end, 16).ok();
+                let start_addr = parse_hex_addr(&start);
+                let end_addr = parse_hex_addr(&end);
 
                 let Some((start, end)) = start_addr.zip(end_addr) else {
                     app.error.replace("Invalid address format".to_string());
@@ -368,8 +359,8 @@ impl PopupState {
                 addr_merge,
                 ..
             } => {
-                let addr1 = usize::from_str_radix(&addr_current, 16).ok();
-                let addr2 = usize::from_str_radix(&addr_merge, 16).ok();
+                let addr1 = parse_hex_addr(&addr_current);
+                let addr2 = parse_hex_addr(&addr_merge);
 
                 // Only update the layout if the merge was actually applied
                 if app.merge_file_into_curr_session(&path, addr1, addr2)

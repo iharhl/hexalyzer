@@ -1,5 +1,6 @@
 use crate::HexViewerApp;
 use crate::app::HexSession;
+use crate::hex_input::parse_hex_addr;
 use crate::ui_popup::PopupState;
 use eframe::egui;
 
@@ -114,10 +115,13 @@ impl HexViewerApp {
                 ui.separator();
 
                 // Edit by typing only: zero speed disables dragging and the text cursor hides
-                // the drag hint
+                // the drag hint. The parser accepts the `0x` prefix.
                 ui.add(
                     egui::DragValue::new(&mut self.gap_fill)
                         .hexadecimal(2, false, true)
+                        .custom_parser(|s| {
+                            parse_hex_addr(s).map(|v| u8::try_from(v).unwrap_or(u8::MAX).into())
+                        })
                         .prefix("0x")
                         .speed(0.0),
                 )

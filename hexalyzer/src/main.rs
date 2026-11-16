@@ -15,6 +15,7 @@ mod byteedit;
 mod clipboard;
 mod events;
 mod fingerprint;
+mod hex_input;
 mod loader;
 mod selection;
 mod ui_button;
