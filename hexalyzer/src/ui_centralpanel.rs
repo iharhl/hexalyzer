@@ -190,7 +190,10 @@ impl HexSession {
         // Get state of the mouse click
         let pointer_state = events.pointer_state;
         let shift_down = events.shift_down;
-        let pointer_hover = pointer_state.pointer_hover;
+        // Ignore the pointer outside the view (partly hidden rows at its edges)
+        let pointer_hover = pointer_state
+            .pointer_hover
+            .filter(|&hover| ui.clip_rect().contains(hover));
         let pointer_down = pointer_state.pointer_down;
 
         // Start and end addresses of the current row

@@ -111,7 +111,10 @@ impl eframe::App for HexViewerApp {
         // Show the content of the active session
         if let Some(index) = self.active_index {
             if let Some(curr_session) = self.sessions.get_mut(index) {
-                curr_session.selection.blocked = self.popup.active || self.converter.has_focus();
+                // Also ignore a drag of another widget (e.g. the side panel edge) moving
+                // over the bytes, as selection follows the raw pointer state
+                curr_session.selection.blocked =
+                    self.popup.active || self.converter.has_focus() || ctx.dragged_id().is_some();
                 curr_session.editor.blocked = self.popup.active || self.converter.has_focus();
                 if self.converter.has_focus() {
                     curr_session.selection.clear();
