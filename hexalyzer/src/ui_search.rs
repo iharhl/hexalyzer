@@ -1,5 +1,5 @@
-use crate::app::{EnterAction, HexSession, colors};
-use crate::events::EventState;
+use crate::app::{HexSession, colors};
+use crate::hex_input::parse_hex_pattern;
 use eframe::egui;
 
 #[derive(Default, PartialEq, Clone)]
@@ -94,6 +94,13 @@ impl Search {
         let n = self.results.partition_point(|&start| start <= addr);
         n > 0 && addr < self.results[n - 1].saturating_add(self.length)
     }
+
+    /// Check if `addr` lies inside the current (active) search match
+    pub(crate) fn is_current_hit(&self, addr: usize) -> bool {
+        self.results
+            .get(self.idx)
+            .is_some_and(|&start| start <= addr && addr < start.saturating_add(self.length))
+    }
 }
 
 /// Accepted hex pattern formats, shown on hover
@@ -110,7 +117,7 @@ impl HexSession {
         // Search if pattern is valid
         let valid = match self.search.current.mode {
             SearchMode::Hex => {
-                if let Some(pattern) = parse_str_into_bytes(input) {
+                if let Some(pattern) = parse_hex_pattern(input) {
                     self.search.results = self.ih.search_bytes(&pattern);
                     self.search.length = pattern.len();
                     true
@@ -148,7 +155,7 @@ impl HexSession {
     }
 
     /// Show content of the search menu
-    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
+    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui) {
         // RadioButtons to select between byte and ascii search
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.search.current.mode, SearchMode::Hex, "Hex")
@@ -176,17 +183,20 @@ impl HexSession {
             self.search.loose_focus = false;
         }
 
-        if textedit.has_focus() {
-            self.enter_action = Some(EnterAction::Search);
+        let enter = textedit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
+        // Keep the focus, so pressing Enter again moves to the next hit
+        if enter {
+            textedit.request_focus();
+        }
+
+        if textedit.has_focus() {
             // Clear the selection to avoid modifying bytes
             // while typing in the search area
             self.selection.clear();
         }
 
-        if (events.enter_released && self.enter_action == Some(EnterAction::Search))
-            || self.search.force
-        {
+        if enter || self.search.force {
             // Same input -> move to next result, otherwise -> search again
             if self.search.current == self.search.last {
                 if !self.search.results.is_empty() {
@@ -242,44 +252,4 @@ impl HexSession {
 
         ui.label(label_text);
     }
-}
-
-/// Parse a hex byte pattern.
-///
-/// Groups of digits may be separated by whitespace or commas, and each group may have
-/// a `0x` / `0X` prefix, e.g. `0A1B`, `0A 1B`, `0x0A1B` or `0x0A, 0x1B`. A group must
-/// have an even number of digits, except a single digit, which is one byte (`0xA` = `0A`).
-///
-/// Returns `None` if the input is not a valid pattern.
-fn parse_str_into_bytes(s: &str) -> Option<Vec<u8>> {
-    let mut bytes = Vec::new();
-
-    let groups = s
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|g| !g.is_empty());
-
-    for group in groups {
-        let digits = group
-            .strip_prefix("0x")
-            .or_else(|| group.strip_prefix("0X"))
-            .unwrap_or(group);
-
-        // Only ASCII hex digits
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-
-        match digits.len() {
-            1 => bytes.push(u8::from_str_radix(digits, 16).ok()?),
-            len if len.is_multiple_of(2) => {
-                for i in (0..len).step_by(2) {
-                    bytes.push(u8::from_str_radix(&digits[i..i + 2], 16).ok()?);
-                }
-            }
-            // Ambiguous, e.g. ABC could be 0A BC or AB 0C
-            _ => return None,
-        }
-    }
-
-    Some(bytes)
 }

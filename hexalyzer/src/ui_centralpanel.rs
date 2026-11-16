@@ -80,7 +80,7 @@ impl HexSession {
         bytes_per_row: usize,
         events: &EventState,
     ) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Show placeholder for empty files
             if self.ih.size == 0 {
                 ui.vertical_centered(|ui| {
@@ -100,8 +100,12 @@ impl HexSession {
             let display_end = align_up((*self.addr.end()).saturating_add(1));
             let total_rows = (display_end - display_start).div_ceil(bytes_per_row);
 
-            // Get row height in pixels (depends on font size)
-            let font_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            // Get row height in pixels. A row is as tall as its tallest item: text,
+            // byte buttons, or the minimum height of a horizontal layout.
+            let row_height = ui
+                .text_style_height(&egui::TextStyle::Monospace)
+                .max(ui_button::BYTE_BUTTON_SIZE.y)
+                .max(ui.spacing().interact_size.y);
 
             // Move the cursor before creating the scroll area, so the view follows it this frame
             let cursor = self.handle_arrow_keys(&events.arrow_keys_pressed, bytes_per_row);
@@ -110,7 +114,7 @@ impl HexSession {
             // or the cursor was moved by the arrow keys.
             self.create_step_scroll(bytes_per_row, cursor).show_rows(
                 ui,
-                font_height,
+                row_height,
                 total_rows,
                 |ui, row_range| {
                     // Draw the main canvas with hex content
@@ -150,7 +154,6 @@ impl HexSession {
             }
             self.search.clear();
             self.editor.clear();
-            self.enter_action = None;
         }
 
         // Start and end addresses of the whole visible area
@@ -187,7 +190,10 @@ impl HexSession {
         // Get state of the mouse click
         let pointer_state = events.pointer_state;
         let shift_down = events.shift_down;
-        let pointer_hover = pointer_state.pointer_hover;
+        // Ignore the pointer outside the view (partly hidden rows at its edges)
+        let pointer_hover = pointer_state
+            .pointer_hover
+            .filter(|&hover| ui.clip_rect().contains(hover));
         let pointer_down = pointer_state.pointer_down;
 
         // Start and end addresses of the current row
@@ -231,7 +237,7 @@ impl HexSession {
                 // Show byte as a button
                 let button = ui_button::light_mono_button(
                     ui,
-                    egui::Vec2::new(21.0, 18.0),
+                    ui_button::BYTE_BUTTON_SIZE,
                     display_value.as_str(),
                     bg_color,
                 );
@@ -327,8 +333,14 @@ impl HexSession {
         }
 
         if self.search.is_hit(addr) {
-            // If inside search results -> highlight (2nd prio)
-            ui.painter().rect_filled(widget.rect, 0.0, colors::GREEN);
+            // If inside search results -> highlight (2nd prio).
+            // The current result is brighter than the others.
+            let color = if self.search.is_current_hit(addr) {
+                colors::BRIGHT_GREEN
+            } else {
+                colors::GREEN
+            };
+            ui.painter().rect_filled(widget.rect, 0.0, color);
             return;
         }
 

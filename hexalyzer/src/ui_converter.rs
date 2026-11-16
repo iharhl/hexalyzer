@@ -1,3 +1,4 @@
+use crate::hex_input::sanitize_hex_input;
 use eframe::egui;
 
 /// Which field to convert from
@@ -96,13 +97,10 @@ impl HexConverter {
     }
 
     fn show_input_rows(&mut self, ui: &mut egui::Ui) {
-        let row_width = ui.available_width();
         let label_w = 50.0;
-        let btn_w = 28.0;
         let row_h = ui.spacing().interact_size.y;
-        let spacing = ui.spacing().item_spacing.x;
-        let text_w = f32::mul_add(btn_w, -2.0, spacing.mul_add(-3.0, row_width - label_w));
-        let copy_icon = "\u{1f4cb}";
+        let btn_size = egui::vec2(32.0, row_h);
+        let copy_icon = "\u{1f5d0}";
         let convert_icon = ">>";
 
         macro_rules! input_row {
@@ -112,22 +110,23 @@ impl HexConverter {
                         [label_w, row_h],
                         egui::Label::new($label).halign(egui::Align::RIGHT),
                     );
+                    let buttons_w = 2.0 * (btn_size.x + ui.spacing().item_spacing.x);
                     let resp = ui.add_sized(
-                        [text_w, row_h],
+                        [ui.available_width() - buttons_w, row_h],
                         egui::TextEdit::singleline($text).font(egui::TextStyle::Monospace),
                     );
                     if resp.changed() {
                         $filter($text);
                     }
                     if ui
-                        .add_sized([btn_w, row_h], egui::Button::new(copy_icon))
+                        .add_sized(btn_size, egui::Button::new(copy_icon))
                         .on_hover_text("Copy")
                         .clicked()
                     {
                         ui.ctx().copy_text($text.clone());
                     }
                     if ui
-                        .add_sized([btn_w, row_h], egui::Button::new(convert_icon))
+                        .add_sized(btn_size, egui::Button::new(convert_icon))
                         .clicked()
                     {
                         self.convert_from($field);
@@ -136,9 +135,7 @@ impl HexConverter {
             };
         }
 
-        input_row!("Hex:", Field::Hex, &mut self.hex, |s: &mut String| {
-            s.retain(|c| c.is_ascii_hexdigit());
-        });
+        input_row!("Hex:", Field::Hex, &mut self.hex, sanitize_hex_input);
         input_row!("Dec:", Field::Dec, &mut self.dec, |s: &mut String| {
             let has_minus = s.starts_with('-');
             s.retain(|c| c.is_ascii_digit());

@@ -1,12 +1,13 @@
 use crate::HexViewerApp;
 use crate::app::HexSession;
+use crate::hex_input::parse_hex_addr;
 use crate::ui_popup::PopupState;
 use eframe::egui;
 
 impl HexViewerApp {
     /// Displays the top menu bar with File, Edit, View, and About buttons
     pub(crate) fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menubar").show_inside(ui, |ui| {
+        egui::Panel::top("menubar").show(ui, |ui| {
             ui.add_space(3.0);
 
             egui::MenuBar::new().ui(ui, |ui| {
@@ -65,15 +66,8 @@ impl HexViewerApp {
                 self.export_curr_session();
             }
 
-            // GAP FILL SUBMENU
-            ui.menu_button("Gap Fill", |ui| {
-                ui.label(egui::RichText::new(
-                    "Fill byte for gaps when\nexporting to BIN",
-                ));
-                ui.separator();
-                ui.radio_value(&mut self.gap_fill, 0x00, "0x00");
-                ui.radio_value(&mut self.gap_fill, 0xFF, "0xFF");
-            });
+            // GAP FILL MENU
+            self.gap_fill_menu(ui);
 
             // RELOAD BUTTON
             if ui
@@ -101,6 +95,38 @@ impl HexViewerApp {
                 }
             }
         });
+    }
+
+    /// Submenu with a hex field for the gap fill byte
+    fn gap_fill_menu(&mut self, ui: &mut egui::Ui) {
+        // Keep the submenu open on clicks inside it, so the field can be edited
+        let config = egui::containers::menu::MenuConfig::new()
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+
+        // Avoid wrapping onto next line due to the label width changing with the new value
+        let button = egui::Button::new(format!("Gap Fill: 0x{:02X}", self.gap_fill))
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .right_text(egui::containers::menu::SubMenuButton::arrow_atom(None));
+
+        egui::containers::menu::SubMenuButton::from_button(button)
+            .config(config)
+            .ui(ui, |ui| {
+                ui.label("Fill byte for gaps when\nexporting to BIN");
+                ui.separator();
+
+                // Edit by typing only: zero speed disables dragging and the text cursor hides
+                // the drag hint. The parser accepts the `0x` prefix.
+                ui.add(
+                    egui::DragValue::new(&mut self.gap_fill)
+                        .hexadecimal(2, false, true)
+                        .custom_parser(|s| {
+                            parse_hex_addr(s).map(|v| u8::try_from(v).unwrap_or(u8::MAX).into())
+                        })
+                        .prefix("0x")
+                        .speed(0.0),
+                )
+                .on_hover_cursor(egui::CursorIcon::Text);
+            });
     }
 
     fn edit_menu(&mut self, ui: &mut egui::Ui) {
@@ -246,6 +272,9 @@ impl HexViewerApp {
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("View", |ui| {
+            ui.checkbox(&mut self.side_panel_expanded, "Show Sidebar");
+            ui.separator();
+
             ui.label("Select Bytes per Row:");
             ui.add_space(3.0);
             ui.radio_value(&mut self.bytes_per_row, 16, "16 bytes");

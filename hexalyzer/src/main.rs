@@ -15,6 +15,7 @@ mod byteedit;
 mod clipboard;
 mod events;
 mod fingerprint;
+mod hex_input;
 mod loader;
 mod selection;
 mod ui_button;
@@ -36,12 +37,11 @@ use eframe::egui;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        vsync: true,
         viewport: egui::ViewportBuilder::default()
             .with_icon(load_icon())
             .with_resizable(true)
             .with_inner_size([960.0, 720.0])
-            .with_min_inner_size([480.0, 320.0]),
+            .with_min_inner_size(app::MIN_WINDOW_SIZE),
         ..Default::default()
     };
     eframe::run_native(
@@ -112,7 +112,10 @@ impl eframe::App for HexViewerApp {
         // Show the content of the active session
         if let Some(index) = self.active_index {
             if let Some(curr_session) = self.sessions.get_mut(index) {
-                curr_session.selection.blocked = self.popup.active || self.converter.has_focus();
+                // Also ignore a drag of another widget (e.g. the side panel edge) moving
+                // over the bytes, as selection follows the raw pointer state
+                curr_session.selection.blocked =
+                    self.popup.active || self.converter.has_focus() || ctx.dragged_id().is_some();
                 curr_session.editor.blocked = self.popup.active || self.converter.has_focus();
                 if self.converter.has_focus() {
                     curr_session.selection.clear();
@@ -120,7 +123,7 @@ impl eframe::App for HexViewerApp {
                 curr_session.show_central_panel(ui, self.bytes_per_row, &self.events);
             }
         } else {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.label("Drop a file or click '+' to start hexing!");
                 });

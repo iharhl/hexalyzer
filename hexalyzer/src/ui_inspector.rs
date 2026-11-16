@@ -387,7 +387,7 @@ fn copyable_value(ui: &mut Ui, type_label: &str, display: &str, copy: &str) {
 
     let clicked = response.clicked();
 
-    let id = ui.id().with(type_label).with("copied");
+    let id = ui.scope_id().with(type_label).with("copied");
     let copied_at: Option<Instant> = ui.data(|d| d.get_temp(id));
     let is_recently_copied = copied_at.is_some_and(|t| t.elapsed() < Duration::from_secs_f32(1.2));
 

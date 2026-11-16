@@ -10,23 +10,21 @@ use crate::ui_search::Search;
 use intelhexlib::IntelHex;
 use std::ops::RangeInclusive;
 
+/// Smallest window size (the side panel collapsed): fits the hex bytes of a 16-byte row
+pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 320.0];
+
 pub mod colors {
     use eframe::egui::Color32;
 
     pub const LIGHT_BLUE: Color32 = Color32::from_rgba_premultiplied(33, 81, 109, 20);
     pub const MUD: Color32 = Color32::from_rgba_premultiplied(54, 44, 19, 20);
     pub const GREEN: Color32 = Color32::from_rgba_premultiplied(35, 53, 38, 20);
+    pub const BRIGHT_GREEN: Color32 = Color32::from_rgba_premultiplied(50, 85, 55, 20);
     pub const GRAY_160: Color32 = Color32::from_gray(160);
     pub const GRAY_210: Color32 = Color32::from_gray(210);
     pub const SHADOW: Color32 = Color32::from_black_alpha(150);
     pub const WARNING: Color32 = Color32::from_rgb(160, 160, 16);
-}
-
-/// Side-panel action that an Enter press triggers
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum EnterAction {
-    JumpTo,
-    Search,
+    pub const ERROR: Color32 = Color32::from_rgb(230, 80, 80);
 }
 
 #[derive(PartialEq, Eq)]
@@ -52,8 +50,6 @@ pub struct HexSession {
     pub search: Search,
     /// Handler for GUI feature to jump to selected address
     pub jump_to: JumpTo,
-    /// Action triggered by Enter
-    pub enter_action: Option<EnterAction>,
     /// Last modified time of the file. Used to detect file changes.
     pub last_modified: std::time::SystemTime,
     /// Last time the file modification was checked. Used to throttle `fs::metadata` calls.
@@ -83,6 +79,8 @@ pub struct HexViewerApp {
     pub(crate) next_session_id: usize,
     /// Whether the side panel is expanded or collapsed
     pub side_panel_expanded: bool,
+    /// Side panel state the minimum window width was last set for
+    pub(crate) min_width_set_for: Option<bool>,
 
     /// Hex/Dec/Bin/ASCII converter tool
     pub converter: HexConverter,
@@ -93,7 +91,7 @@ pub struct HexViewerApp {
     /// Errors during parsing, editing, or writing `IntelHex` file
     pub error: Option<String>,
 
-    /// Gap fill byte used when exporting to binary (0x00 or 0xFF)
+    /// Gap fill byte used when exporting to binary
     pub gap_fill: u8,
 
     /// Set once the user has confirmed quitting with unsaved changes
@@ -111,7 +109,6 @@ impl Default for HexSession {
             selection: Selection::default(),
             search: Search::default(),
             jump_to: JumpTo::default(),
-            enter_action: None,
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,
@@ -178,9 +175,10 @@ impl Default for HexViewerApp {
             converter: HexConverter::default(),
             next_session_id: 1,
             side_panel_expanded: true,
+            min_width_set_for: None,
             events: EventState::default(),
             error: None,
-            gap_fill: 0x00,
+            gap_fill: 0xFF,
             quit_confirmed: false,
         }
     }

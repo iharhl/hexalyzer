@@ -26,11 +26,15 @@ impl StepScrollArea {
         self
     }
 
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation
+    )]
     pub fn show_rows<R>(
         self,
         ui: &mut egui::Ui,
-        font_height: f32,
+        row_height: f32,
         total_rows: usize,
         add_contents: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>) -> R,
     ) -> R {
@@ -43,33 +47,29 @@ impl StepScrollArea {
             _ => ui.data_mut(|d| *d.get_temp_mut_or_default(self.id)),
         };
 
-        // Make discrete scroll logic (one row is a scroll step).
-        // Add threshold to ignore small drifts.
-        let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll_delta.abs() > 0.4 {
-            let row_delta = if scroll_delta > 0.0 { -1 } else { 1 };
-            top_row = top_row.saturating_add_signed(row_delta);
-        }
+        // Distance between the tops of two consecutive rows
+        let item_spacing = ui.spacing().item_spacing.y;
+        let full_row_size = row_height + item_spacing;
 
-        // Make view boundary.
-        // Visible rows are not fully accurate. Had to add margin for a more consistent display.
-        let full_row_size = font_height + ui.spacing().item_spacing.y + 2.5;
+        // Scroll logic
+        top_row = self.apply_scroll(ui, top_row, full_row_size);
+
+        // Number of rows that fit fully.
         // At least one row is always treated as visible (tiny windows).
-        let visible_rows = ((rect.height() / full_row_size).floor() as usize).max(1);
+        let visible_rows =
+            (((rect.height() + item_spacing) / full_row_size).floor() as usize).max(1);
 
-        // Scroll just enough to keep the followed row in view.
-        // The last visible row can be clipped, so it does not count as in view.
+        // Scroll just enough to keep the followed row in view
         if let Some(ScrollTarget::Follow(row)) = self.target {
-            let fully_visible_rows = visible_rows.saturating_sub(1).max(1);
             if row < top_row {
                 top_row = row;
-            } else if row >= top_row + fully_visible_rows {
-                top_row = row + 1 - fully_visible_rows;
+            } else if row >= top_row + visible_rows {
+                top_row = row + 1 - visible_rows;
             }
         }
 
-        // Allow 1 empty row at the bottom
-        let max_top_row = total_rows.saturating_sub(visible_rows - 1);
+        // Stop scrolling once the last row is fully in view
+        let max_top_row = total_rows.saturating_sub(visible_rows);
         top_row = top_row.min(max_top_row);
 
         ui.data_mut(|d| d.insert_temp(self.id, top_row));
@@ -77,16 +77,62 @@ impl StepScrollArea {
         // Draw a custom scrollbar
         draw_custom_scrollbar(ui, rect, top_row, total_rows, visible_rows, self.id);
 
+        // Rows that fit fully rarely fill the view exactly. Fill the leftover space with one
+        // more, partly hidden row: below the view normally, or above it at the end of the
+        // data, where the content is aligned to the bottom edge instead.
+        let (row_range, offset_y) = if top_row > 0 && top_row == max_top_row {
+            let shown_rows = visible_rows + 1;
+            let content_height = (shown_rows as f32).mul_add(full_row_size, -item_spacing);
+            (top_row - 1..total_rows, rect.height() - content_height)
+        } else {
+            (top_row..(top_row + visible_rows + 1).min(total_rows), 0.0)
+        };
+
         // Render content
+        let content_rect = rect.with_min_y(rect.top() + offset_y);
         let mut child_ui = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(rect)
+                .max_rect(content_rect)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
         child_ui.set_clip_rect(rect);
 
-        let row_range = top_row..(top_row + visible_rows).min(total_rows);
         add_contents(&mut child_ui, row_range)
+    }
+
+    /// Move `top_row` by the distance scrolled this frame, in whole rows.
+    ///
+    /// The view moves proportionally to the input: a wheel notch moves a couple of rows,
+    /// a trackpad follows the fingers. Distance smaller than a row is carried over to the
+    /// next frame. Rounding makes even a small wheel notch move at least one row.
+    ///
+    /// When a scroll gesture of at least half a row ends (e.g. a wheel notch), its leftover
+    /// is dropped, so it never leaks into the next gesture. The leftover of smaller gestures
+    /// is kept, so slow scrolling still adds up to whole rows.
+    #[allow(clippy::cast_possible_truncation)]
+    fn apply_scroll(&self, ui: &egui::Ui, top_row: usize, row_height: f32) -> usize {
+        let residual_id = self.id.with("scroll_residual");
+        let (delta, scrolling) =
+            ui.input(|i| (i.smooth_scroll_delta.y, i.scroll_source().is_some()));
+
+        // Leftover distance below a row, and the distance of the current gesture
+        let (mut carried, mut gesture): (f32, f32) =
+            ui.data(|d| d.get_temp(residual_id).unwrap_or_default());
+        if !scrolling {
+            if gesture.abs() >= row_height / 2.0 {
+                carried = 0.0;
+            }
+            gesture = 0.0;
+        }
+        gesture += delta;
+
+        let distance = carried + delta;
+        let rows = (distance / row_height).round();
+        let residual = rows.mul_add(-row_height, distance);
+        ui.data_mut(|d| d.insert_temp(residual_id, (residual, gesture)));
+
+        // A positive delta moves the content down, i.e. the view towards earlier rows
+        top_row.saturating_add_signed(-(rows as isize))
     }
 }
 
@@ -205,6 +251,6 @@ impl HexSession {
                 follow_addr.map(|addr| ScrollTarget::Follow(self.get_row(addr, bytes_per_row)))
             });
 
-        StepScrollArea::new(egui::Id::new(self.id)).with_target(target)
+        StepScrollArea::new(egui::Id::unique(self.id)).with_target(target)
     }
 }

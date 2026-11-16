@@ -21,7 +21,7 @@ impl HexViewerApp {
         // Overwrite the central panel with a message when file is dragged over
         let hovering_files = ctx.input(|i| i.raw.hovered_files.clone());
         if !hovering_files.is_empty() {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.heading("Drop file to open");
                 });
@@ -31,9 +31,7 @@ impl HexViewerApp {
         // Load file if dropped
         if ctx.input(|i| !i.raw.dropped_files.is_empty()) {
             for file in ctx.input(|i| i.raw.dropped_files.clone()) {
-                if let Some(path) = file.path {
-                    self.load_file(&path);
-                }
+                self.load_file(&file.path().to_path_buf());
             }
         }
     }

@@ -8,11 +8,9 @@ pub struct PointerState {
 
 #[derive(Default, Clone)]
 pub struct EventState {
-    pub(crate) last_key_released: Option<egui::Key>,
     pub(crate) hex_chars: Vec<char>,
     pub(crate) pointer_state: PointerState,
     pub(crate) escape_pressed: bool,
-    pub(crate) enter_released: bool,
     pub(crate) shift_down: bool,
     /// Arrow key presses this frame (key-repeats included)
     pub(crate) arrow_keys_pressed: Vec<egui::Key>,
@@ -75,23 +73,8 @@ fn collect_inner(i: &egui::InputState, text_edit_focused: bool) -> EventState {
                 pressed: true,
                 modifiers,
                 ..
-            } => {
-                if !text_edit_focused && !modifiers.command && !modifiers.ctrl && !modifiers.alt {
-                    state.arrow_keys_pressed.push(*key);
-                }
-            }
-            // Key release events
-            egui::Event::Key {
-                key,
-                pressed: false,
-                ..
-            } => {
-                state.last_key_released = Some(*key);
-
-                // Store Enter key release directly
-                if state.last_key_released == Some(egui::Key::Enter) {
-                    state.enter_released = true;
-                }
+            } if !text_edit_focused && !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
+                state.arrow_keys_pressed.push(*key);
             }
             _ => {}
         }
