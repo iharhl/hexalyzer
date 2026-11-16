@@ -65,15 +65,8 @@ impl HexViewerApp {
                 self.export_curr_session();
             }
 
-            // GAP FILL SUBMENU
-            ui.menu_button("Gap Fill", |ui| {
-                ui.label(egui::RichText::new(
-                    "Fill byte for gaps when\nexporting to BIN",
-                ));
-                ui.separator();
-                ui.radio_value(&mut self.gap_fill, 0x00, "0x00");
-                ui.radio_value(&mut self.gap_fill, 0xFF, "0xFF");
-            });
+            // GAP FILL MENU
+            self.gap_fill_menu(ui);
 
             // RELOAD BUTTON
             if ui
@@ -101,6 +94,35 @@ impl HexViewerApp {
                 }
             }
         });
+    }
+
+    /// Submenu with a hex field for the gap fill byte
+    fn gap_fill_menu(&mut self, ui: &mut egui::Ui) {
+        // Keep the submenu open on clicks inside it, so the field can be edited
+        let config = egui::containers::menu::MenuConfig::new()
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+
+        // Avoid wrapping onto next line due to the label width changing with the new value
+        let button = egui::Button::new(format!("Gap Fill: 0x{:02X}", self.gap_fill))
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .right_text(egui::containers::menu::SubMenuButton::arrow_atom(None));
+
+        egui::containers::menu::SubMenuButton::from_button(button)
+            .config(config)
+            .ui(ui, |ui| {
+                ui.label("Fill byte for gaps when\nexporting to BIN");
+                ui.separator();
+
+                // Edit by typing only: zero speed disables dragging and the text cursor hides
+                // the drag hint
+                ui.add(
+                    egui::DragValue::new(&mut self.gap_fill)
+                        .hexadecimal(2, false, true)
+                        .prefix("0x")
+                        .speed(0.0),
+                )
+                .on_hover_cursor(egui::CursorIcon::Text);
+            });
     }
 
     fn edit_menu(&mut self, ui: &mut egui::Ui) {
