@@ -1,6 +1,5 @@
 use crate::HexViewerApp;
 use crate::app::colors;
-use crate::events;
 use crate::loader;
 use eframe::egui;
 use std::path::PathBuf;
@@ -111,12 +110,7 @@ impl PopupState {
 
     /// Render the popup content and return what the user did with it.
     /// For `CloseConfirm` / `QuitConfirm` popups, also sets the chosen `close_action`.
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        events: &events::EventState,
-        close_action: &mut Option<CloseAction>,
-    ) -> PopupOutcome {
+    fn show(&mut self, ui: &mut egui::Ui, close_action: &mut Option<CloseAction>) -> PopupOutcome {
         match self {
             Self::Error(msg) => {
                 ui.label(egui::RichText::new(msg.as_str()).size(14.0));
@@ -132,30 +126,32 @@ impl PopupState {
                 PopupOutcome::Open
             }
             Self::ReAddr { addr: address, .. } => {
-                Self::show_hex_field(ui, "New start address:", address);
-                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
+                let enter = Self::show_hex_field(ui, "New start address:", address);
+                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || enter)
             }
             Self::Merge {
                 addr_curr: addr_current,
                 addr_merge,
                 ..
             } => {
-                Self::show_hex_field(
+                let enter_current = Self::show_hex_field(
                     ui,
                     "New start address for the current file:\n(leave empty to not change it)",
                     addr_current,
                 );
-                Self::show_hex_field(
+                let enter_merge = Self::show_hex_field(
                     ui,
                     "New start address for the selected file:\n(leave empty to not change it)",
                     addr_merge,
                 );
-                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
+                PopupOutcome::confirmed_if(
+                    ui.button(" OK ").clicked() || enter_current || enter_merge,
+                )
             }
             Self::InsertRange { start, end, .. } | Self::RemoveRange { start, end, .. } => {
-                Self::show_hex_field(ui, "Start address:", start);
-                Self::show_hex_field(ui, "End address (inclusive):", end);
-                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || events.enter_released)
+                let enter_start = Self::show_hex_field(ui, "Start address:", start);
+                let enter_end = Self::show_hex_field(ui, "End address (inclusive):", end);
+                PopupOutcome::confirmed_if(ui.button(" OK ").clicked() || enter_start || enter_end)
             }
             Self::CloseConfirm { .. } => {
                 ui.label("This file has unsaved changes. What would you like to do?");
@@ -243,7 +239,11 @@ impl PopupState {
         });
     }
 
-    fn show_hex_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    /// Show a labelled hex input field.
+    /// Returns `true` if Enter was pressed in the field.
+    fn show_hex_field(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
+        let mut enter = false;
+
         ui.vertical(|ui| {
             ui.add_space(3.0);
             ui.label(label);
@@ -270,10 +270,14 @@ impl PopupState {
                         .take(8)
                         .collect();
                 }
+
+                // A single-line field gives up focus on Enter
+                enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
         });
 
         ui.add_space(8.0);
+        enter
     }
 
     /// Execute the action for a confirmed popup
@@ -508,7 +512,6 @@ impl HexViewerApp {
         };
 
         let title = state.title();
-        let events = &self.events;
         let close_action = &mut self.popup.close_action;
         let mut is_open = true;
 
@@ -539,7 +542,7 @@ impl HexViewerApp {
                     }
                     ui.separator();
                     ui.add_space(5.0);
-                    state.show(ui, events, close_action)
+                    state.show(ui, close_action)
                 })
                 .inner
         } else {
@@ -554,7 +557,7 @@ impl HexViewerApp {
                         ui.label(format!("File: {name}"));
                         ui.add_space(3.0);
                     }
-                    state.show(ui, events, close_action)
+                    state.show(ui, close_action)
                 })
                 .and_then(|response| response.inner)
                 .unwrap_or(PopupOutcome::Open)

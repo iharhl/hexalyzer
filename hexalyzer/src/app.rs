@@ -24,13 +24,6 @@ pub mod colors {
     pub const ERROR: Color32 = Color32::from_rgb(230, 80, 80);
 }
 
-/// Side-panel action that an Enter press triggers
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum EnterAction {
-    JumpTo,
-    Search,
-}
-
 #[derive(PartialEq, Eq)]
 pub enum Endianness {
     Little,
@@ -54,8 +47,6 @@ pub struct HexSession {
     pub search: Search,
     /// Handler for GUI feature to jump to selected address
     pub jump_to: JumpTo,
-    /// Action triggered by Enter
-    pub enter_action: Option<EnterAction>,
     /// Last modified time of the file. Used to detect file changes.
     pub last_modified: std::time::SystemTime,
     /// Last time the file modification was checked. Used to throttle `fs::metadata` calls.
@@ -113,7 +104,6 @@ impl Default for HexSession {
             selection: Selection::default(),
             search: Search::default(),
             jump_to: JumpTo::default(),
-            enter_action: None,
             last_modified: std::time::SystemTime::UNIX_EPOCH,
             last_mod_check: std::time::Instant::now(),
             file_changed_on_disk: false,

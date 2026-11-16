@@ -1,5 +1,4 @@
 use crate::app::{HexSession, HexViewerApp, colors};
-use crate::events::EventState;
 use crate::loader::get_last_modified;
 use crate::ui_inspector::format_with_separators;
 use eframe::egui;
@@ -45,14 +44,6 @@ impl HexViewerApp {
     /// reopens the panel. The open panel's edge can be dragged to the window edge to close
     /// it, and double-clicking the edge toggles it.
     pub(crate) fn show_side_panel(&mut self, ui: &mut egui::Ui) {
-        // Clone events before mutable borrow of self for session access
-        let mut events = self.events.clone();
-
-        // Consume Enter confirming a popup or typed into the converter window
-        if self.popup.active || self.converter.has_focus() {
-            events.enter_released = false;
-        }
-
         // Copied as the panel contents borrow `self` mutably
         let mut expanded = self.side_panel_expanded;
 
@@ -70,7 +61,7 @@ impl HexViewerApp {
             expanded_panel,
             |ui, show_expanded| {
                 if show_expanded {
-                    self.show_side_panel_contents(ui, &events);
+                    self.show_side_panel_contents(ui);
                     false
                 } else {
                     show_collapsed_strip(ui)
@@ -83,7 +74,7 @@ impl HexViewerApp {
     }
 
     /// Show contents of the open side panel
-    fn show_side_panel_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
+    fn show_side_panel_contents(&mut self, ui: &mut egui::Ui) {
         ui.add_space(3.0);
 
         // Get the currently active session. If none active - use the dummy one
@@ -165,7 +156,7 @@ impl HexViewerApp {
             .default_open(true)
             .show(ui, |ui| {
                 ui.add_space(5.0);
-                curr_session.show_jumpto_contents(ui, events);
+                curr_session.show_jumpto_contents(ui);
                 ui.add_space(5.0);
             });
 
@@ -176,7 +167,7 @@ impl HexViewerApp {
             .default_open(true)
             .show(ui, |ui| {
                 ui.add_space(5.0);
-                curr_session.show_search_contents(ui, events);
+                curr_session.show_search_contents(ui);
                 ui.add_space(5.0);
             });
 

@@ -1,5 +1,4 @@
-use crate::app::{EnterAction, HexSession, colors};
-use crate::events::EventState;
+use crate::app::{HexSession, colors};
 use eframe::egui;
 
 #[derive(Default, PartialEq, Clone)]
@@ -155,7 +154,7 @@ impl HexSession {
     }
 
     /// Show content of the search menu
-    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui, events: &EventState) {
+    pub(crate) fn show_search_contents(&mut self, ui: &mut egui::Ui) {
         // RadioButtons to select between byte and ascii search
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.search.current.mode, SearchMode::Hex, "Hex")
@@ -183,17 +182,20 @@ impl HexSession {
             self.search.loose_focus = false;
         }
 
-        if textedit.has_focus() {
-            self.enter_action = Some(EnterAction::Search);
+        let enter = textedit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
+        // Keep the focus, so pressing Enter again moves to the next hit
+        if enter {
+            textedit.request_focus();
+        }
+
+        if textedit.has_focus() {
             // Clear the selection to avoid modifying bytes
             // while typing in the search area
             self.selection.clear();
         }
 
-        if (events.enter_released && self.enter_action == Some(EnterAction::Search))
-            || self.search.force
-        {
+        if enter || self.search.force {
             // Same input -> move to next result, otherwise -> search again
             if self.search.current == self.search.last {
                 if !self.search.results.is_empty() {
