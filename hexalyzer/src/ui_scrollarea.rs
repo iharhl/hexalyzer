@@ -104,22 +104,32 @@ impl StepScrollArea {
     ///
     /// The view moves proportionally to the input: a wheel notch moves a couple of rows,
     /// a trackpad follows the fingers. Distance smaller than a row is carried over to the
-    /// next frame and dropped once the scroll gesture ends, so it never leaks into the
-    /// next gesture. Rounding makes even a small wheel notch move at least one row.
+    /// next frame. Rounding makes even a small wheel notch move at least one row.
+    ///
+    /// When a scroll gesture of at least half a row ends (e.g. a wheel notch), its leftover
+    /// is dropped, so it never leaks into the next gesture. The leftover of smaller gestures
+    /// is kept, so slow scrolling still adds up to whole rows.
     #[allow(clippy::cast_possible_truncation)]
     fn apply_scroll(&self, ui: &egui::Ui, top_row: usize, row_height: f32) -> usize {
         let residual_id = self.id.with("scroll_residual");
         let (delta, scrolling) =
             ui.input(|i| (i.smooth_scroll_delta.y, i.scroll_source().is_some()));
 
-        let carried: f32 = if scrolling {
-            ui.data(|d| d.get_temp(residual_id).unwrap_or_default())
-        } else {
-            0.0
-        };
+        // Leftover distance below a row, and the distance of the current gesture
+        let (mut carried, mut gesture): (f32, f32) =
+            ui.data(|d| d.get_temp(residual_id).unwrap_or_default());
+        if !scrolling {
+            if gesture.abs() >= row_height / 2.0 {
+                carried = 0.0;
+            }
+            gesture = 0.0;
+        }
+        gesture += delta;
+
         let distance = carried + delta;
         let rows = (distance / row_height).round();
-        ui.data_mut(|d| d.insert_temp(residual_id, rows.mul_add(-row_height, distance)));
+        let residual = rows.mul_add(-row_height, distance);
+        ui.data_mut(|d| d.insert_temp(residual_id, (residual, gesture)));
 
         // A positive delta moves the content down, i.e. the view towards earlier rows
         top_row.saturating_add_signed(-(rows as isize))
