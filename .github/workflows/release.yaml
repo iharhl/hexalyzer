@@ -22,6 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install Rust
+        run: rustup toolchain install
+
       # The tag must match the crate versions (shared via the workspace), so the files get the right names
       - name: Compare tag with crate versions
         run: |
@@ -61,7 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
 
@@ -106,6 +110,11 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Lets users check their download, e.g. `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
       # Reuses the release if one already exists for this tag, otherwise creates a draft
       - name: Upload to GitHub release
         env:
@@ -115,4 +124,4 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME"
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS.txt --clobber

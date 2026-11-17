@@ -1,0 +1,6 @@
+# Pins the Rust version for local builds, CI and releases, so the same tag always
+# builds with the same compiler.
+[toolchain]
+channel = "1.100"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

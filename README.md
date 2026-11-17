@@ -15,6 +15,9 @@ Hexalyzer project contains two main parts:
 
 ## Installation
 
+Building from source needs Rust 1.95 or newer. The repository pins the exact compiler
+in `rust-toolchain.toml`, which `rustup` installs automatically on the first build.
+
 Use [cargo packager](https://crates.io/crates/cargo-packager) to build an installer for your platform.
 
 Go into hexalyzer directory `cd hexalyzer` and run `cargo packager --release`.
@@ -27,7 +30,9 @@ To build the CLI tool, run
 `cargo build -p intelhexlib --features cli --release`
 
 Prebuilt installers and the CLI for macOS and Windows are attached to each
-[release](https://github.com/iharhl/hexalyzer/releases).
+[release](https://github.com/iharhl/hexalyzer/releases), together with a `SHA256SUMS.txt`
+file. To check a download, run `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`
+in the folder with both files (on Windows: `Get-FileHash <file>` and compare by eye).
 
 ### Notes for Linux
 
@@ -208,7 +213,8 @@ and the full test suite on Linux, macOS and Windows.
 
 To make a release, bump the version in the root `Cargo.toml` and push a matching tag.
 The release workflow runs the checks, builds the macOS and Windows installers and CLI,
-and attaches them as ZIPs to a draft GitHub release, ready for release notes and publishing.
+and attaches them as ZIPs with a checksum file to a draft GitHub release, ready for release
+notes and publishing. To update Rust, bump `channel` in `rust-toolchain.toml`.
 
 
 ## History
