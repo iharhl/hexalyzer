@@ -99,6 +99,29 @@ fn test_ihex_shows_info_valid() {
 }
 
 #[test]
+fn test_ihex_shows_info_start_address() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: ih_valid_2.hex has a Start Linear Address record (0x11223344)
+    let path_str = "tests/fixtures/ih_valid_2.hex";
+
+    // Act
+    let output = Command::new(HEXCLI_EXE).args(["info", path_str]).output()?;
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Start Addr:  0x11223344 (EIP)"),
+        "stdout did not contain the start address:\n{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_ihex_shows_info_invalid() {
     // Arrange
     let path_str = "tests/cli_tests.rs";

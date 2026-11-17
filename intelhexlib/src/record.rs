@@ -60,6 +60,66 @@ impl RecordType {
     }
 }
 
+/// Program start address, given by a start address record
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum StartAddress {
+    /// Start Segment Address record (type 03): `CS:IP` register pair (80x86 real mode)
+    Segment { cs: u16, ip: u16 },
+    /// Start Linear Address record (type 05): 32-bit `EIP` value
+    Linear(u32),
+}
+
+impl StartAddress {
+    /// Start address held by `record`, or `None` if it is not a start address record
+    /// with a 4-byte payload
+    pub(crate) fn from_record(record: &Record) -> Option<Self> {
+        let [b0, b1, b2, b3] = record.data[..] else {
+            return None;
+        };
+        match record.rtype {
+            RecordType::StartSegmentAddress => Some(Self::Segment {
+                cs: u16::from_be_bytes([b0, b1]),
+                ip: u16::from_be_bytes([b2, b3]),
+            }),
+            RecordType::StartLinearAddress => {
+                Some(Self::Linear(u32::from_be_bytes([b0, b1, b2, b3])))
+            }
+            _ => None,
+        }
+    }
+
+    /// Type of the record that stores this start address.
+    #[must_use]
+    pub const fn record_type(self) -> RecordType {
+        match self {
+            Self::Segment { .. } => RecordType::StartSegmentAddress,
+            Self::Linear(_) => RecordType::StartLinearAddress,
+        }
+    }
+
+    /// Record payload (big-endian), as written to the hex file.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 4] {
+        match self {
+            Self::Segment { cs, ip } => {
+                let [cs_hi, cs_lo] = cs.to_be_bytes();
+                let [ip_hi, ip_lo] = ip.to_be_bytes();
+                [cs_hi, cs_lo, ip_hi, ip_lo]
+            }
+            Self::Linear(eip) => eip.to_be_bytes(),
+        }
+    }
+}
+
+impl std::fmt::Display for StartAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Segment { cs, ip } => write!(f, "0x{cs:04X}:0x{ip:04X} (CS:IP)"),
+            Self::Linear(eip) => write!(f, "0x{eip:08X} (EIP)"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Record {
     pub(crate) length: u8,
@@ -605,6 +665,94 @@ mod tests {
                 IntelHexErrorKind::RecordNotSupported
             ))
         );
+    }
+
+    #[test]
+    fn test_start_address_from_record() {
+        // Arrange
+        let payload = vec![0x12, 0x34, 0x56, 0x78];
+        let cases = [
+            (
+                RecordType::StartSegmentAddress,
+                payload.clone(),
+                Some(StartAddress::Segment {
+                    cs: 0x1234,
+                    ip: 0x5678,
+                }),
+            ),
+            (
+                RecordType::StartLinearAddress,
+                payload.clone(),
+                Some(StartAddress::Linear(0x1234_5678)),
+            ),
+            (RecordType::Data, payload, None),
+            (RecordType::ExtendedLinearAddress, vec![0x12, 0x34], None),
+        ];
+
+        // Act
+        let results: Vec<_> = cases
+            .iter()
+            .map(|(rtype, data, _)| {
+                StartAddress::from_record(&Record {
+                    length: 0,
+                    address: 0,
+                    rtype: *rtype,
+                    data: data.clone(),
+                    checksum: 0,
+                })
+            })
+            .collect();
+
+        // Assert
+        for ((rtype, _, expected), result) in cases.iter().zip(results) {
+            assert_eq!(result, *expected, "{rtype:?}");
+        }
+    }
+
+    #[test]
+    fn test_start_address_record_type_and_bytes() {
+        // Arrange
+        let cases = [
+            (
+                StartAddress::Segment {
+                    cs: 0x1234,
+                    ip: 0x5678,
+                },
+                RecordType::StartSegmentAddress,
+            ),
+            (
+                StartAddress::Linear(0x1234_5678),
+                RecordType::StartLinearAddress,
+            ),
+        ];
+
+        // Act
+        let results: Vec<_> = cases
+            .iter()
+            .map(|(start_addr, _)| (start_addr.record_type(), start_addr.to_bytes()))
+            .collect();
+
+        // Assert: big-endian payload for both kinds
+        for ((start_addr, expected_type), (rtype, bytes)) in cases.iter().zip(results) {
+            assert_eq!(rtype, *expected_type, "{start_addr}");
+            assert_eq!(bytes, [0x12, 0x34, 0x56, 0x78], "{start_addr}");
+        }
+    }
+
+    #[test]
+    fn test_start_address_display() {
+        // Arrange
+        let segment = StartAddress::Segment {
+            cs: 0xF000,
+            ip: 0x0A,
+        };
+        let linear = StartAddress::Linear(0x0800_0000);
+
+        // Act
+        let texts = [segment.to_string(), linear.to_string()];
+
+        // Assert
+        assert_eq!(texts, ["0xF000:0x000A (CS:IP)", "0x08000000 (EIP)"]);
     }
 
     #[test]

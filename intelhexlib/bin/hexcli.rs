@@ -239,6 +239,9 @@ fn run_info(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         format_addr(ih.get_min_addr().unwrap_or(0)),
         format_addr(ih.get_max_addr().unwrap_or(0)),
     );
+    if let Some(start_addr) = ih.start_addr {
+        println!("Start Addr:  {start_addr}");
+    }
     Ok(())
 }
 

@@ -74,6 +74,7 @@ fn content_hash(ih: &IntelHex) -> u64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use intelhexlib::StartAddress;
 
     /// Returns `IntelHex` with zero-filled inclusive ranges
     fn create_ih(ranges: &[(usize, usize)]) -> IntelHex {
@@ -288,7 +289,7 @@ mod tests {
         let mut fp = saved(&ih);
 
         // Act - add start address
-        ih.start_addr = Some([0x11; 18]);
+        ih.start_addr = Some(StartAddress::Linear(0x1111_1111));
         fp.recompute(&ih);
 
         // Assert
@@ -296,14 +297,14 @@ mod tests {
 
         // Act - change start address
         fp.mark_saved(&ih);
-        ih.start_addr = Some([0x22; 18]);
+        ih.start_addr = Some(StartAddress::Linear(0x2222_2222));
         fp.recompute(&ih);
 
         // Assert
         assert!(fp.is_changed());
 
         // Act - restore start address
-        ih.start_addr = Some([0x11; 18]);
+        ih.start_addr = Some(StartAddress::Linear(0x1111_1111));
         fp.recompute(&ih);
 
         // Assert
@@ -341,7 +342,7 @@ mod tests {
     fn test_start_address_removed() {
         // Arrange
         let mut ih = create_ih(&[(0x0, 0xF)]);
-        ih.start_addr = Some([0x11; 18]);
+        ih.start_addr = Some(StartAddress::Linear(0x1111_1111));
         let mut fp = saved(&ih);
         ih.start_addr = None;
 
