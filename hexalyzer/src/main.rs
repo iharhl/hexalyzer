@@ -31,6 +31,9 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(load_icon())
+            // On Linux, must match the `hexalyzer.desktop` file of the .deb / AppImage,
+            // so the desktop shows the app's icon and name for the window
+            .with_app_id("hexalyzer")
             .with_resizable(true)
             .with_inner_size([960.0, 720.0])
             .with_min_inner_size(app::MIN_WINDOW_SIZE),

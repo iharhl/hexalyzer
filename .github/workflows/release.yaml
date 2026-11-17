@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Dry run: builds and packages everything without making a release.
+  # The files can be downloaded from the run's summary page.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,6 +21,7 @@ jobs:
 
   version:
     name: Check version
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -41,28 +45,41 @@ jobs:
           exit $status
 
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.platform }})
     needs: [checks, version]
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon only (arm64 GitHub's macOS runners)
           - os: macos-latest
-            zip: MacInstallerAndCLI
-            format: dmg
-            installer: "*.dmg"
-            cli: hexcli
+            platform: macos-arm64
+            formats: dmg
+            installers: "*.dmg"
           - os: windows-latest
-            zip: WinInstallerAndCLI
-            format: nsis
-            installer: "*-setup.exe"
-            cli: hexcli.exe
+            platform: windows-x86_64
+            formats: nsis
+            installers: "*-setup.exe"
+          # The oldest available Ubuntu, so the app runs on distros with an older glibc
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            formats: deb,appimage
+            installers: "*.deb *.AppImage"
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+
+      # Headers needed to build the GUI (eframe / winit / rfd) on Linux
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: Install Rust
         run: rustup toolchain install
@@ -72,35 +89,43 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
-      # Builds the app via `before-packaging-command` in hexalyzer/Cargo.toml, then bundles it
+      # Builds the app via `before-packaging-command` in hexalyzer/Cargo.toml, then bundles it.
+      # A fresh output folder keeps leftovers from cached builds out of the release.
       - name: Build and package app
         working-directory: hexalyzer
-        run: cargo packager --release --formats ${{ matrix.format }}
+        run: |
+          mkdir -p ../packages
+          cargo packager --release --formats ${{ matrix.formats }} --out-dir ../packages
 
       - name: Build CLI
         run: cargo build -p intelhexlib --features cli --release --locked
 
-      # One ZIP per platform with the installer and the CLI, as in earlier releases
-      - name: Create ZIP
+      # Installers keep cargo-packager's names (app, version, architecture);
+      # the CLI is archived so it keeps its executable bit, and named after the platform.
+      - name: Collect release files
         run: |
-          name="${{ matrix.zip }}_${GITHUB_REF_NAME}.zip"
+          version=$(cargo pkgid -p intelhexlib | sed 's/.*[#@]//')
+          cli="hexcli_${version}_${{ matrix.platform }}"
           mkdir dist
+          (cd packages && cp ${{ matrix.installers }} ../dist/)
           cd target/release
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a "../../dist/$name" ${{ matrix.installer }} ${{ matrix.cli }}
+            7z a "../../dist/$cli.zip" hexcli.exe
           else
-            zip "../../dist/$name" ${{ matrix.installer }} ${{ matrix.cli }}
+            tar -czf "../../dist/$cli.tar.gz" hexcli
           fi
+          ls -l ../../dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.zip }}
-          path: dist/*.zip
+          name: hexalyzer-${{ matrix.platform }}
+          path: dist/*
           if-no-files-found: error
 
   release:
     name: Draft release
     needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,7 +138,10 @@ jobs:
       # Lets users check their download, e.g. `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`
       - name: Create checksums
         working-directory: dist
-        run: sha256sum *.zip > SHA256SUMS.txt
+        run: |
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+          cat SHA256SUMS.txt
 
       # Reuses the release if one already exists for this tag, otherwise creates a draft
       - name: Upload to GitHub release
@@ -124,4 +152,4 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME"
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS.txt --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

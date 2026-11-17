@@ -233,8 +233,9 @@ impl PopupState {
             ui.add_space(3.0);
 
             ui.label(format!(
-                "v{} | Copyright (c) 2026 Ihar Hlukhau",
-                env!("CARGO_PKG_VERSION")
+                "v{} | Copyright (c) 2026 Ihar Hlukhau | {} License",
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_LICENSE")
             ));
             ui.add_space(5.0);
         });

@@ -15,24 +15,34 @@ Hexalyzer project contains two main parts:
 
 ## Installation
 
-Building from source needs Rust 1.95 or newer. The repository pins the exact compiler
+Prebuilt installers and the `hexcli` tool are attached to each
+[release](https://github.com/iharhl/hexalyzer/releases):
+
+| Platform              | App                                     | CLI                                  |
+|-----------------------|-----------------------------------------|--------------------------------------|
+| macOS (Apple Silicon) | `Hexalyzer_<version>_aarch64.dmg`       | `hexcli_<version>_macos-arm64.tar.gz`  |
+| Windows (x64)         | `Hexalyzer_<version>_x64-setup.exe`     | `hexcli_<version>_windows-x86_64.zip`  |
+| Linux (x64)           | `hexalyzer_<version>_amd64.deb` or `hexalyzer_<version>_x86_64.AppImage` | `hexcli_<version>_linux-x86_64.tar.gz` |
+
+Intel Macs are not supported by the prebuilt app and CLI; build them from source instead (see below).
+
+Each release also has a `SHA256SUMS.txt` file. To check a download, run
+`shasum -a 256 -c SHA256SUMS.txt --ignore-missing` in the folder with both files
+(on Windows: `Get-FileHash <file>` and compare by eye).
+
+### Building from source
+
+Building needs Rust 1.95 or newer. The repository pins the exact compiler
 in `rust-toolchain.toml`, which `rustup` installs automatically on the first build.
 
 Use [cargo packager](https://crates.io/crates/cargo-packager) to build an installer for your platform.
-
 Go into hexalyzer directory `cd hexalyzer` and run `cargo packager --release`.
-It builds the app first and then packages it.
-
-This will create `.exe` installer for Windows, and `.dmg` installer for
-macOS. Linux was not tested but should work too.
+It builds the app first and then packages it: a `.dmg` on macOS, a `-setup.exe`
+on Windows, and Linux packages such as `.deb` and AppImage
+(pick them with e.g. `--formats deb,appimage`).
 
 To build the CLI tool, run
 `cargo build -p intelhexlib --features cli --release`
-
-Prebuilt installers and the CLI for macOS and Windows are attached to each
-[release](https://github.com/iharhl/hexalyzer/releases), together with a `SHA256SUMS.txt`
-file. To check a download, run `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`
-in the folder with both files (on Windows: `Get-FileHash <file>` and compare by eye).
 
 ### Notes for Linux
 
@@ -43,14 +53,17 @@ sudo apt-get install libxkbcommon-dev libwayland-dev \
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
+The file dialogs go through the desktop portal (`xdg-desktop-portal`), which GNOME, KDE
+and most other desktops already run. The AppImage may need `libfuse2` on newer distributions.
+
 ### Notes for Windows
 
 The executable icon is embedded at build time by the `winresource` build dependency,
 so no extra setup is needed.
 
-If you want to install the app in certain folders, e.g.,
-`C:\Program Files\Hexalyzer`, you need to run the installer with
-admin rights, the same goes for uninstalling.
+The installer is per user: it installs into `%LOCALAPPDATA%\Hexalyzer` and needs no
+admin rights. Releases up to v0.3.0 installed into `C:\Program Files\Hexalyzer` instead;
+uninstall that version first (as admin) to avoid having two copies.
 
 
 ## Usage
@@ -212,9 +225,10 @@ Every pull request is checked by GitHub Actions: formatting, clippy (warnings fa
 and the full test suite on Linux, macOS and Windows.
 
 To make a release, bump the version in the root `Cargo.toml` and push a matching tag.
-The release workflow runs the checks, builds the macOS and Windows installers and CLI,
-and attaches them as ZIPs with a checksum file to a draft GitHub release, ready for release
-notes and publishing. To update Rust, bump `channel` in `rust-toolchain.toml`.
+The release workflow runs the checks, builds the installers and CLI for macOS, Windows and Linux,
+and attaches them with a checksum file to a draft GitHub release, ready for release
+notes and publishing. To test the release build without making a release, run the Release
+workflow manually from the Actions tab; the files are attached to that run. To update Rust, bump `channel` in `rust-toolchain.toml`.
 
 
 ## History

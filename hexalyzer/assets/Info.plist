@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged by cargo-packager into the generated Info.plist of the macOS app; keys here win.
+
+  CFBundleVersion: cargo-packager sets it to the packaging time (e.g. 20260620.194458),
+  which the About window shows as "Version 0.3.0 (20260620.194458)". Left empty, it shows
+  just "Version 0.3.0"; the version itself comes from Cargo.toml (CFBundleShortVersionString).
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleVersion</key>
+    <string></string>
+</dict>
+</plist>
