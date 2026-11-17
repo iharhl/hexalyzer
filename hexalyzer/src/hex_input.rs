@@ -420,4 +420,106 @@ mod tests {
         // Assert: no groups is an empty (valid) pattern
         assert_eq!(patterns, [Some(vec![]), Some(vec![]), Some(vec![])]);
     }
+
+    // ======================== strip_radix_prefixes ========================
+
+    #[test]
+    fn test_strip_radix_prefixes_binary() {
+        // Arrange
+        let inputs = ["0b1010, 0B11", "0b", "10b1", "0x12"];
+
+        // Act
+        let values = inputs.map(|s| strip_radix_prefixes(s, 'b'));
+
+        // Assert: only `0b` at a group start is a prefix
+        assert_eq!(values, ["1010, 11", "", "10b1", "0x12"].map(String::from));
+    }
+
+    #[test]
+    fn test_strip_radix_prefixes_non_ascii() {
+        // Arrange
+        let inputs = ["é0x12", "0x1é"];
+
+        // Act
+        let values = inputs.map(|s| strip_radix_prefixes(s, 'x'));
+
+        // Assert: `é` is not a digit, so a group starts after it
+        assert_eq!(values, ["é12", "1é"].map(String::from));
+    }
+
+    // ============================ filter_digits ===========================
+
+    #[test]
+    fn test_filter_digits_binary() {
+        // Arrange
+        let input = "0101 2 10";
+
+        // Act
+        let value = filter_digits(input, 2);
+
+        // Assert: a dropped digit leaves a single separator
+        assert_eq!(value, "0101 10");
+    }
+
+    #[test]
+    fn test_filter_digits_decimal() {
+        // Arrange
+        let input = "12a, 3F";
+
+        // Act
+        let value = filter_digits(input, 10);
+
+        // Assert
+        assert_eq!(value, "12 3");
+    }
+
+    #[test]
+    fn test_filter_digits_keeps_trailing_separator() {
+        // Arrange: typing `0A ` must leave room for the next group
+        let input = "0a ";
+
+        // Act
+        let value = filter_digits(input, 16);
+
+        // Assert
+        assert_eq!(value, "0A ");
+    }
+
+    #[test]
+    fn test_filter_digits_non_ascii() {
+        // Arrange: non-ASCII digits and no-break space
+        let input = "１２\u{A0}٣4";
+
+        // Act
+        let value = filter_digits(input, 16);
+
+        // Assert
+        assert_eq!(value, "4");
+    }
+
+    // ===================== parse_hex_pattern (non-ASCII) ==================
+
+    #[test]
+    fn test_parse_hex_pattern_non_ascii() {
+        // Arrange
+        let inputs = ["é", "0Aé", "１２", "0x１２"];
+
+        // Act
+        let patterns = inputs.map(parse_hex_pattern);
+
+        // Assert: rejected without panicking on multi-byte chars
+        assert_eq!(patterns, [const { None }; 4]);
+    }
+
+    #[test]
+    fn test_parse_hex_addr_non_ascii() {
+        // Arrange
+        let inputs = ["１２", "1é", "0xé"];
+
+        // Act
+        let addrs = inputs.map(parse_hex_addr);
+
+        // Assert
+        assert_eq!(addrs, [None; 3]);
+    }
 }
