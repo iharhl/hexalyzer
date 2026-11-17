@@ -13,7 +13,8 @@ impl HexViewerApp {
         let ctx = ui.ctx().clone();
 
         // Return if the popup is shown
-        // TODO: also consider async file dialog (for the future) as the app panics if file is dragged when the dialog window is open
+        // TODO: also consider async file dialog (for the future) as the app panics
+        //       if file is dragged when the dialog window is open
         if self.popup.active {
             return;
         }
