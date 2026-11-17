@@ -69,6 +69,8 @@ pub struct HexViewerApp {
     pub sessions: Vec<HexSession>,
     /// Index of the currently active session. If `None`, no session is active.
     pub active_index: Option<usize>,
+    /// Session for the (disabled) side panel while no file is open
+    pub(crate) placeholder_session: HexSession,
     /// Maximum number of tabs that can be opened.
     pub max_tabs: usize,
     /// Displayed bytes per row
@@ -169,6 +171,7 @@ impl Default for HexViewerApp {
         Self {
             sessions: Vec::new(),
             active_index: None,
+            placeholder_session: HexSession::default(),
             max_tabs: 5,
             bytes_per_row: 16,
             popup: Popup::default(),

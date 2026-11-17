@@ -309,4 +309,46 @@ mod tests {
         // Assert
         assert!(!fp.is_changed());
     }
+
+    #[test]
+    fn test_zero_byte_at_zero_address_is_detected() {
+        // Arrange: hashes of `(0x0, 0x00)` must not be zero, or this byte would be invisible
+        let empty = saved(&IntelHex::new());
+        let mut fp = empty;
+        let ih = create_ih(&[(0x0, 0x0)]);
+
+        // Act
+        fp.recompute(&ih);
+
+        // Assert
+        assert!(fp.is_changed());
+    }
+
+    #[test]
+    fn test_byte_changed_to_same_value() {
+        // Arrange
+        let ih = create_ih(&[(0x0, 0xF)]);
+        let mut fp = saved(&ih);
+
+        // Act
+        fp.byte_changed(0x3, 0x00, 0x00);
+
+        // Assert
+        assert!(!fp.is_changed());
+    }
+
+    #[test]
+    fn test_start_address_removed() {
+        // Arrange
+        let mut ih = create_ih(&[(0x0, 0xF)]);
+        ih.start_addr = Some([0x11; 18]);
+        let mut fp = saved(&ih);
+        ih.start_addr = None;
+
+        // Act
+        fp.recompute(&ih);
+
+        // Assert
+        assert!(fp.is_changed());
+    }
 }

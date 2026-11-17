@@ -97,111 +97,109 @@ impl HexViewerApp {
 
     /// Show contents of the open side panel
     fn show_side_panel_contents(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(3.0);
-
-        // Get the currently active session. If none active - use the dummy one
-        // to construct the UI.
-        // TODO: better way than using dummy?
-        let mut dummy_session = HexSession::default();
+        // With no file open, the sections are drawn (greyed out) from a placeholder
+        // session, so the layout doesn't jump once a file is opened.
+        let has_session = self.active_index.is_some();
         let curr_session: &mut HexSession =
-            self.get_curr_session_mut().unwrap_or(&mut dummy_session);
+            match self.active_index.and_then(|i| self.sessions.get_mut(i)) {
+                Some(session) => session,
+                None => &mut self.placeholder_session,
+            };
 
-        // FILE INFORMATION
-        egui::CollapsingHeader::new("File Information")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add_space(5.0);
+        show_section(ui, "File Information", has_session, |ui| {
+            show_file_info(ui, curr_session, has_session);
+        });
+        show_section(ui, "Jump To Address", has_session, |ui| {
+            curr_session.show_jumpto_contents(ui);
+        });
+        show_section(ui, "Search", has_session, |ui| {
+            curr_session.show_search_contents(ui);
+        });
+        show_section(ui, "Data Inspector", has_session, |ui| {
+            curr_session.show_data_inspector_contents(ui);
+        });
+    }
+}
 
-                let filepath = curr_session.ih.filepath.to_string_lossy().into_owned();
-                let filename = &curr_session.name;
+/// Draw a collapsible side panel section, open by default.
+/// The header stays clickable while the contents are disabled.
+fn show_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    enabled: bool,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    ui.add_space(3.0);
+    egui::CollapsingHeader::new(title)
+        .default_open(true)
+        .show(ui, |ui| {
+            if !enabled {
+                ui.disable();
+            }
+            ui.add_space(5.0);
+            add_contents(ui);
+            ui.add_space(5.0);
+        });
+}
 
-                egui::Grid::new("file_info_grid")
-                    .num_columns(2) // two columns: label + value
-                    .spacing([30.0, 4.0]) // horizontal & vertical spacing
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
-                            ui.label("File Name");
-                        });
-                        // Wrap the name + show the filepath on hover
-                        let response = ui.add(
-                            egui::Label::new(filename)
-                                .wrap()
-                                .sense(egui::Sense::hover()),
-                        );
-                        if !filepath.is_empty() {
-                            response.on_hover_text(&filepath);
-                        }
-                        ui.end_row();
+/// Show the file name and size, and warn if the file changed on disk
+fn show_file_info(ui: &mut egui::Ui, session: &mut HexSession, has_session: bool) {
+    let filepath = session.ih.filepath.to_string_lossy().into_owned();
+    let (filename, size) = if has_session {
+        let size = format_with_separators(session.ih.size);
+        (session.name.as_str(), format!("{size} bytes"))
+    } else {
+        ("--", "--".to_string())
+    };
 
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
-                            ui.label("Payload Size");
-                        });
-                        let size = format_with_separators(curr_session.ih.size);
-                        ui.label(format!("{size} bytes"));
-                        ui.end_row();
-                    });
-
-                // Get the last modified time of the file. Changed -> display warning.
-                // Throttled at once per 2 seconds to avoid too many syscalls.
-                if !filepath.is_empty()
-                    && curr_session.last_mod_check.elapsed() > std::time::Duration::from_secs(2)
-                {
-                    curr_session.last_mod_check = std::time::Instant::now();
-                    if let Some(t) = get_last_modified(&curr_session.ih.filepath).ok()
-                        && t != std::time::SystemTime::UNIX_EPOCH
-                    {
-                        curr_session.file_changed_on_disk = t != curr_session.last_modified;
-                    }
-                }
-
-                if curr_session.file_changed_on_disk {
-                    ui.add_space(3.0);
-                    ui.label(
-                        egui::RichText::new("File on disk has been modified!")
-                            .color(colors::WARNING)
-                            .size(12.0)
-                            .strong(),
-                    )
-                    .on_hover_text(
-                        "This file has been modified on disk since it was opened.\n\
-                        Use File > Reload to reload it from disk.",
-                    );
-                }
-
-                ui.add_space(5.0);
+    egui::Grid::new("file_info_grid")
+        .num_columns(2) // two columns: label + value
+        .spacing([30.0, 4.0]) // horizontal & vertical spacing
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
+                ui.label("File Name");
             });
+            // Wrap the name + show the filepath on hover
+            let response = ui.add(
+                egui::Label::new(filename)
+                    .wrap()
+                    .sense(egui::Sense::hover()),
+            );
+            if !filepath.is_empty() {
+                response.on_hover_text(&filepath);
+            }
+            ui.end_row();
 
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::LEFT), |ui| {
+                ui.label("Payload Size");
+            });
+            ui.label(size);
+            ui.end_row();
+        });
+
+    // Get the last modified time of the file. Changed -> display warning.
+    // Throttled at once per 2 seconds to avoid too many syscalls.
+    if !filepath.is_empty() && session.last_mod_check.elapsed() > std::time::Duration::from_secs(2)
+    {
+        session.last_mod_check = std::time::Instant::now();
+        if let Some(t) = get_last_modified(&session.ih.filepath).ok()
+            && t != std::time::SystemTime::UNIX_EPOCH
+        {
+            session.file_changed_on_disk = t != session.last_modified;
+        }
+    }
+
+    if session.file_changed_on_disk {
         ui.add_space(3.0);
-
-        // JUMP TO ADDRESS
-        egui::CollapsingHeader::new("Jump To Address")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add_space(5.0);
-                curr_session.show_jumpto_contents(ui);
-                ui.add_space(5.0);
-            });
-
-        ui.add_space(3.0);
-
-        // SEARCH
-        egui::CollapsingHeader::new("Search")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add_space(5.0);
-                curr_session.show_search_contents(ui);
-                ui.add_space(5.0);
-            });
-
-        ui.add_space(3.0);
-
-        // DATA INSPECTOR
-        egui::CollapsingHeader::new("Data Inspector")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add_space(5.0);
-                curr_session.show_data_inspector_contents(ui);
-                ui.add_space(5.0);
-            });
+        ui.label(
+            egui::RichText::new("File on disk has been modified!")
+                .color(colors::WARNING)
+                .size(12.0)
+                .strong(),
+        )
+        .on_hover_text(
+            "This file has been modified on disk since it was opened.\n\
+            Use File > Reload to reload it from disk.",
+        );
     }
 }

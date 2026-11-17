@@ -139,3 +139,79 @@ impl HexSession {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================ ByteEdit ===============================
+
+    #[test]
+    fn test_clear_keeps_modified_marks() {
+        // Arrange
+        let mut editor = ByteEdit {
+            in_progress: true,
+            buffer: "A".to_string(),
+            addr: Some([0x10, 0x10]),
+            modified: HashMap::from([(0x10, 0x00)]),
+            blocked: false,
+        };
+
+        // Act
+        editor.clear();
+
+        // Assert: only the pending edit is dropped
+        assert!(!editor.in_progress);
+        assert_eq!(editor.buffer, "");
+        assert_eq!(editor.addr, None);
+        assert_eq!(editor.modified, HashMap::from([(0x10, 0x00)]));
+    }
+
+    #[test]
+    fn test_remap_modified_up() {
+        // Arrange
+        let mut editor = ByteEdit {
+            modified: HashMap::from([(0x10, 0xAA), (0x12, 0xBB)]),
+            ..ByteEdit::default()
+        };
+
+        // Act
+        editor.remap_modified(0x1000, 0x10);
+
+        // Assert
+        assert_eq!(
+            editor.modified,
+            HashMap::from([(0x1000, 0xAA), (0x1002, 0xBB)])
+        );
+    }
+
+    #[test]
+    fn test_remap_modified_down() {
+        // Arrange
+        let mut editor = ByteEdit {
+            modified: HashMap::from([(0x1000, 0xAA), (0x1002, 0xBB)]),
+            ..ByteEdit::default()
+        };
+
+        // Act
+        editor.remap_modified(0x0, 0x1000);
+
+        // Assert
+        assert_eq!(editor.modified, HashMap::from([(0x0, 0xAA), (0x2, 0xBB)]));
+    }
+
+    #[test]
+    fn test_remap_modified_same_address() {
+        // Arrange
+        let mut editor = ByteEdit {
+            modified: HashMap::from([(0x10, 0xAA)]),
+            ..ByteEdit::default()
+        };
+
+        // Act
+        editor.remap_modified(0x10, 0x10);
+
+        // Assert
+        assert_eq!(editor.modified, HashMap::from([(0x10, 0xAA)]));
+    }
+}
