@@ -21,7 +21,15 @@ egui = { version = "0.37.0", default-features = false }
 rfd = "0.18.0"
 same-file = "1.0.6"
 
-[profile.bench]
-inherits = "release"
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
 lto = true
 codegen-units = 1
+strip = true

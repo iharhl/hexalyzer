@@ -49,17 +49,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Same lints as `./run.sh check`, but any warning fails the job
+      # Lints come from `[workspace.lints]` in Cargo.toml; here any warning fails the job
       - name: Run clippy
-        run: >
-          cargo clippy --workspace --all-targets --all-features --
-          -D warnings
-          -W clippy::all
-          -W clippy::pedantic
-          -W clippy::nursery
-          -W clippy::unwrap_used
-          -W clippy::expect_used
-          -W clippy::panic
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})

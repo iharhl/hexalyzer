@@ -17,9 +17,8 @@ Hexalyzer project contains two main parts:
 
 Use [cargo packager](https://crates.io/crates/cargo-packager) to build an installer for your platform.
 
-Go into hexalyzer directory `cd hexalyzer` and run:
-1. `cargo build --release`
-2. `cargo packager --release`
+Go into hexalyzer directory `cd hexalyzer` and run `cargo packager --release`.
+It builds the app first and then packages it.
 
 This will create `.exe` installer for Windows, and `.dmg` installer for
 macOS. Linux was not tested but should work too.
@@ -207,7 +206,7 @@ Common tasks are run through `run.sh`:
 Every pull request is checked by GitHub Actions: formatting, clippy (warnings fail the build)
 and the full test suite on Linux, macOS and Windows.
 
-To make a release, bump the version in both `Cargo.toml` files and push a matching tag.
+To make a release, bump the version in the root `Cargo.toml` and push a matching tag.
 The release workflow runs the checks, builds the macOS and Windows installers and CLI,
 and attaches them as ZIPs to a draft GitHub release, ready for release notes and publishing.
 

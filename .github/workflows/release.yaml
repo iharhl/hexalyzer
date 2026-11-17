@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The tag must match both crate versions, so the files get the right names
+      # The tag must match the crate versions (shared via the workspace), so the files get the right names
       - name: Compare tag with crate versions
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -68,15 +68,13 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
-      # cargo packager only bundles an existing build, so build the app first
+      # Builds the app via `before-packaging-command` in hexalyzer/Cargo.toml, then bundles it
       - name: Build and package app
         working-directory: hexalyzer
-        run: |
-          cargo build --release
-          cargo packager --release --formats ${{ matrix.format }}
+        run: cargo packager --release --formats ${{ matrix.format }}
 
       - name: Build CLI
-        run: cargo build -p intelhexlib --features cli --release
+        run: cargo build -p intelhexlib --features cli --release --locked
 
       # One ZIP per platform with the installer and the CLI, as in earlier releases
       - name: Create ZIP
