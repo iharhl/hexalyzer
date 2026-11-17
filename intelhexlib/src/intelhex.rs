@@ -1813,7 +1813,6 @@ mod tests {
 
         let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
 
-        // todo: fail
         for addr in addr_start..addr_start + length {
             update_map.push((addr * 2, (addr + 2) as u8));
             ih.buffer.insert(addr * 2, vec![addr as u8]);
@@ -1846,11 +1845,14 @@ mod tests {
         }
         ih.buffer.pop_last(); // pop the last addr
 
+        let buffer_before = ih.buffer.clone();
+
         // Act
         let res = ih.update_slice(&update_map);
 
         // Assert
         assert!(res.is_err());
+        assert_eq!(ih.buffer, buffer_before);
     }
 
     #[test]

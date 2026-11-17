@@ -549,6 +549,7 @@ fn test_ihex_merge_valid() {
             format!("{in_path_str_3}:0xFFF0").as_str(),
             "--gap-fill",
             "0x00",
+            "--overwrite",
         ])
         .output()
         .expect("Failed to run ihex");
@@ -852,7 +853,248 @@ fn test_ihex_flags_invalid() {
         "Unexpected argument 'extra.bin'",
     );
 
+    // Act & Assert - switch not supported by the command
+    assert_fails_with(
+        &["convert", in_path_str_1, out_bin_str, "--overwrite"],
+        "Option '--overwrite' is not supported by 'convert'",
+    );
+
+    // Act & Assert - repeated switch
+    assert_fails_with(
+        &[
+            "merge",
+            out_hex_str,
+            in_path_str_1,
+            in_path_str_2,
+            "--overwrite",
+            "--overwrite",
+        ],
+        "Option '--overwrite' is given more than once",
+    );
+
     // None of the failed commands should have written an output file
     assert!(!PathBuf::from(out_bin_str).exists());
     assert!(!PathBuf::from(out_hex_str).exists());
+}
+
+// ================================ MERGE CONFLICTS ================================
+
+/// Output directory of the merge conflict tests.
+const MERGE_OUT_DIR: &str = "build/t7-cli";
+
+/// Hex file whose start address record (0xAABBCCDD) differs from the one in `ih_valid_2.hex`.
+const OTHER_START_ADDR_HEX: &str = ":04000005AABBCCDDE9\n:01200000AB34\n:00000001FF\n";
+
+/// Run `hexcli` with `args`.
+fn run_hexcli(args: &[&str]) -> std::io::Result<std::process::Output> {
+    Command::new(HEXCLI_EXE).args(args).output()
+}
+
+/// Create the output directory and return the path of `name` inside it,
+/// with any file left there by a previous run removed.
+fn merge_out_path(name: &str) -> std::io::Result<String> {
+    std::fs::create_dir_all(MERGE_OUT_DIR)?;
+    let path = format!("{MERGE_OUT_DIR}/{name}");
+    std::fs::remove_file(&path).unwrap_or_default();
+    Ok(path)
+}
+
+/// Write a hex file whose start address record differs from the one in `ih_valid_2.hex`.
+fn write_other_start_addr_hex(name: &str) -> std::io::Result<String> {
+    let path = merge_out_path(name)?;
+    std::fs::write(&path, OTHER_START_ADDR_HEX)?;
+    Ok(path)
+}
+
+#[test]
+fn test_ihex_merge_overlap_fails_by_default() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: both files have data at 0x100
+    let out_path_str = merge_out_path("overlap_default.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex",
+        "tests/fixtures/ih_valid_3.hex",
+    ])?;
+
+    // Assert
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ih_valid_3.hex overlaps an earlier input at 0x100")
+            && stderr.contains("--overwrite"),
+        "stderr did not contain expected error text:\n{stderr}"
+    );
+    assert!(!PathBuf::from(&out_path_str).exists());
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_overlap_with_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: both files have data at 0x100
+    let out_path_str = merge_out_path("overlap_overwrite.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex",
+        "tests/fixtures/ih_valid_3.hex",
+        "--overwrite",
+    ])?;
+
+    // Assert: the later input wins at 0x100
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let merged = IntelHex::from_hex(&out_path_str)?;
+    let later = IntelHex::from_hex("tests/fixtures/ih_valid_3.hex")?;
+    assert_eq!(merged.read_byte(0x100), later.read_byte(0x100));
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_differing_start_addr_fails_by_default() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Arrange
+    let other_path_str = write_other_start_addr_hex("start_addr_default_in.hex")?;
+    let out_path_str = merge_out_path("start_addr_default.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex",
+        &other_path_str,
+    ])?;
+
+    // Assert
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("start_addr_default_in.hex has a start address record that differs")
+            && stderr.contains("--overwrite"),
+        "stderr did not contain expected error text:\n{stderr}"
+    );
+    assert!(!PathBuf::from(&out_path_str).exists());
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_differing_start_addr_with_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let other_path_str = write_other_start_addr_hex("start_addr_overwrite_in.hex")?;
+    let out_path_str = merge_out_path("start_addr_overwrite.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex",
+        &other_path_str,
+        "--overwrite",
+    ])?;
+
+    // Assert: the later input's start address record is kept
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let merged = IntelHex::from_hex(&out_path_str)?;
+    let later = IntelHex::from_hex(&other_path_str)?;
+    assert!(later.start_addr.is_some());
+    assert_eq!(merged.start_addr, later.start_addr);
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_identical_start_addr() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: the same file twice, the second copy moved so that the data does not overlap
+    let out_path_str = merge_out_path("start_addr_identical.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex",
+        "tests/fixtures/ih_valid_2.hex:0x2000",
+    ])?;
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let merged = IntelHex::from_hex(&out_path_str)?;
+    let input = IntelHex::from_hex("tests/fixtures/ih_valid_2.hex")?;
+    assert_eq!(merged.start_addr, input.start_addr);
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_relocated_start_addr_warns() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: ih_valid_2.hex has a start address record and its data starts at 0x100
+    let out_path_str = merge_out_path("relocated_warns.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex:0x2000",
+        "tests/fixtures/ih_valid_3.hex",
+    ])?;
+
+    // Assert: the merge still succeeds
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Warning: ")
+            && stderr.contains("ih_valid_2.hex has a start address record that is not relocated"),
+        "stderr did not contain expected warning:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_ihex_merge_unmoved_start_addr_no_warning() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: ih_valid_2.hex data already starts at 0x100, ih_valid_3.hex has no start record
+    let out_path_str = merge_out_path("unmoved_no_warning.hex")?;
+
+    // Act
+    let output = run_hexcli(&[
+        "merge",
+        &out_path_str,
+        "tests/fixtures/ih_valid_2.hex:0x100",
+        "tests/fixtures/ih_valid_3.hex:0x2000",
+    ])?;
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Warning"),
+        "stderr contained an unexpected warning:\n{stderr}"
+    );
+    Ok(())
 }

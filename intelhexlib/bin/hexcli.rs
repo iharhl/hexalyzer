@@ -1,4 +1,4 @@
-use intelhexlib::IntelHex;
+use intelhexlib::{IntelHex, IntelHexError, IntelHexErrorKind};
 use std::cmp::PartialEq;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,7 @@ fn print_usage() {
     println!(
         "  --gap-fill <val>   Byte to fill gaps when converting / merging to BIN (default: 0xFF)"
     );
+    println!("  --overwrite        Merge: later inputs replace overlapping data (default: error)");
     println!("\nExamples:");
     println!("  hexcli info firmware.hex");
     println!("  hexcli relocate firmware.hex firmware_shifted.hex --address 0x1000");
@@ -164,7 +165,7 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             run_convert(&in_abs_path, &out_path, base_addr, gap_fill)
         }
         "merge" => {
-            let args = parse_args(cmd, rest, &["--gap-fill"])?;
+            let args = parse_args(cmd, rest, &["--gap-fill", "--overwrite"])?;
 
             // Guard: Output path and at least two inputs
             if args.positional.len() < 3 {
@@ -196,8 +197,9 @@ fn run_dispatch(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Er
             }
 
             let gap_fill = args.flag("--gap-fill").map_or(Ok(0xFF), parse_gap_fill)?;
+            let overwrite = args.flag("--overwrite").is_some();
 
-            run_merge(inputs, &out_path, gap_fill)
+            run_merge(inputs, &out_path, gap_fill, overwrite)
         }
         _ => {
             print_usage();
@@ -292,6 +294,7 @@ fn run_merge(
     inputs: Vec<(PathBuf, Option<usize>)>,
     out_path: &PathBuf,
     gap_fill: u8,
+    overwrite: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut master_ih = IntelHex::new();
 
@@ -306,6 +309,13 @@ fn run_merge(
             FileType::Hex => {
                 let mut ih = IntelHex::from_hex(&path)?;
                 if let Some(new_addr) = addr {
+                    if ih.start_addr.is_some() && ih.get_min_addr() != Some(new_addr) {
+                        eprintln!(
+                            "Warning: {} has a start address record that is not relocated. \
+                             The merged file may point to the old entry point.",
+                            path.display()
+                        );
+                    }
                     ih.relocate(new_addr)?;
                 }
                 ih
@@ -315,7 +325,13 @@ fn run_merge(
             }
         };
 
-        master_ih.merge(&ih); // todo: use safe or not safe merge?
+        if overwrite {
+            master_ih.merge(&ih);
+        } else {
+            master_ih
+                .merge_safe(&ih)
+                .map_err(|e| merge_conflict_message(&path, &e))?;
+        }
     }
 
     if get_file_type(out_path) == FileType::Bin {
@@ -332,6 +348,22 @@ fn run_merge(
 }
 
 // =============================== HELPER FUNCTIONS ===============================
+
+/// Explain why `path` could not be merged into the inputs provided before it.
+fn merge_conflict_message(path: &Path, err: &IntelHexError) -> String {
+    let path = path.display();
+    match err {
+        IntelHexError::UpdateError(IntelHexErrorKind::RecordAddressOverlap(addr)) => format!(
+            "{path} overlaps an earlier input at 0x{addr:X} \
+             (use --overwrite to let later inputs replace overlapping data)"
+        ),
+        IntelHexError::UpdateError(IntelHexErrorKind::DuplicateStartAddress) => format!(
+            "{path} has a start address record that differs from an earlier input's \
+             (use --overwrite to keep the later one)"
+        ),
+        _ => format!("Cannot merge {path}: {err}"),
+    }
+}
 
 /// Parse a string as a hex number (with optional 0x prefix)
 fn parse_hex_str(s: &str) -> Result<usize, std::num::ParseIntError> {
@@ -384,7 +416,10 @@ fn parse_gap_fill(s: &str) -> Result<u8, String> {
 }
 
 /// All the flags CLI knows about.
-const KNOWN_FLAGS: [&str; 2] = ["--address", "--gap-fill"];
+const KNOWN_FLAGS: [&str; 3] = ["--address", "--gap-fill", "--overwrite"];
+
+/// Flags that take no value (their presence is the setting).
+const SWITCH_FLAGS: [&str; 1] = ["--overwrite"];
 
 /// Arguments that follow the command name, split into positional arguments and flag values.
 struct ParsedArgs {
@@ -419,6 +454,7 @@ impl ParsedArgs {
 
 /// Split the arguments after the command name into positional arguments and flags.
 /// Flags may appear anywhere. Everything after a bare `--` is treated as positional.
+/// Switches (see `SWITCH_FLAGS`) take no value, all other flags need one.
 /// Unknown, unsupported, repeated, or value-less flags cause errors.
 fn parse_args(cmd: &str, args: &[String], allowed: &[&str]) -> Result<ParsedArgs, String> {
     let mut parsed = ParsedArgs {
@@ -444,6 +480,10 @@ fn parse_args(cmd: &str, args: &[String], allowed: &[&str]) -> Result<ParsedArgs
         }
         if parsed.flag(arg).is_some() {
             return Err(format!("Option '{arg}' is given more than once"));
+        }
+        if SWITCH_FLAGS.contains(&arg.as_str()) {
+            parsed.flags.push((arg.clone(), String::new()));
+            continue;
         }
         match iter.next() {
             Some(value) if !value.starts_with("--") => {
