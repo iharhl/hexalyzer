@@ -24,4 +24,4 @@ mod search;
 // Public APIs
 pub use error::{IntelHexError, IntelHexErrorKind};
 pub use intelhex::{IntelHex, IterRange};
-pub use record::RecordType;
+pub use record::{RecordType, StartAddress};

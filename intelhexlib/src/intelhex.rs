@@ -7,7 +7,7 @@
 //! and generating valid Intel HEX output with configurable record sizes.
 
 use crate::error::{IntelHexError, IntelHexErrorKind};
-use crate::record::{Record, RecordType};
+use crate::record::{Record, RecordType, StartAddress};
 use crate::search;
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -147,8 +147,8 @@ pub struct IntelHex {
     /// Size of the payload (data bytes).
     /// Does not represent the full size of the Intel HEX file.
     pub size: usize,
-    /// Start address of the Intel HEX file (stores full record as raw bytes)
-    pub start_addr: Option<[u8; 18]>,
+    /// Program start address, from the start address record (if present)
+    pub start_addr: Option<StartAddress>,
     /// Maximum payload size for data records
     max_payload_size: usize,
     /// Offset of the linear address segment
@@ -442,15 +442,8 @@ impl IntelHex {
                         ));
                     }
 
-                    // Directly store the record slice.
-                    // Line length is always 19 chars (9 bytes + ':').
-                    // Error cases are not checked here as it was done during record parsing.
-                    // TODO: split legacy and modern way of specifying start address?
-                    if line.len() == 19
-                        && let Ok(bytes) = line[1..19].try_into()
-                    {
-                        self.start_addr = Some(bytes);
-                    }
+                    // Payload length (4 bytes) was validated during record parsing
+                    self.start_addr = StartAddress::from_record(&record);
                 }
             }
         }
@@ -642,11 +635,10 @@ impl IntelHex {
 
         // Write to a temporary file first, so a failed write keeps the original file intact
         write_file_atomically(filepath.as_ref(), |writer| {
-            // Write start address record (raw bytes + newline)
-            if let Some(s) = self.start_addr {
-                writer.write_all(b":")?;
-                writer.write_all(&s)?;
-                writeln!(writer)?;
+            // Write start address record
+            if let Some(start_addr) = self.start_addr {
+                let record = Record::create(0, start_addr.record_type(), &start_addr.to_bytes())?;
+                writeln!(writer, "{record}")?;
             }
 
             let mut cur_high_addr = 0u16;
@@ -1813,7 +1805,6 @@ mod tests {
 
         let mut update_map: Vec<(usize, u8)> = Vec::with_capacity(length);
 
-        // todo: fail
         for addr in addr_start..addr_start + length {
             update_map.push((addr * 2, (addr + 2) as u8));
             ih.buffer.insert(addr * 2, vec![addr as u8]);
@@ -1846,11 +1837,14 @@ mod tests {
         }
         ih.buffer.pop_last(); // pop the last addr
 
+        let buffer_before = ih.buffer.clone();
+
         // Act
         let res = ih.update_slice(&update_map);
 
         // Assert
         assert!(res.is_err());
+        assert_eq!(ih.buffer, buffer_before);
     }
 
     #[test]
@@ -2031,9 +2025,7 @@ mod tests {
         let mut ih2 = IntelHex::new();
         ih2.buffer.insert(0x10, vec![0x1, 0x1]);
         ih2.buffer.insert(0x22, vec![0x1, 0x1]);
-        ih2.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
+        ih2.start_addr = Some(StartAddress::Linear(0x1122_3344));
 
         // Act
         ih1.merge(&ih2);
@@ -2053,9 +2045,7 @@ mod tests {
         ih3.buffer.insert(0x04, vec![0x2]);
         ih3.buffer.insert(0x12, vec![0x2]);
         ih3.buffer.insert(0x24, vec![0x2, 0x2, 0x2]);
-        ih3.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 48, 53, 49,
-        ]); // :040000051122334051
+        ih3.start_addr = Some(StartAddress::Linear(0x1122_3340));
 
         // Act
         ih1.merge(&ih3);
@@ -2087,9 +2077,7 @@ mod tests {
         let mut ih2 = IntelHex::new();
         ih2.buffer.insert(0x10, vec![0x1, 0x1]);
         ih2.buffer.insert(0x22, vec![0x1, 0x1]);
-        ih2.start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
+        ih2.start_addr = Some(StartAddress::Linear(0x1122_3344));
 
         // Act
         let res = ih1.merge_safe(&ih2);
@@ -2111,18 +2099,12 @@ mod tests {
         type Case = (
             &'static str,          // case name
             Vec<(usize, Vec<u8>)>, // chunks of the other file
-            Option<[u8; 18]>,      // start address record
+            Option<StartAddress>,  // start address record
             IntelHexErrorKind,     // expected error
         );
 
-        // :04000005112233444D
-        let start_addr_a = [
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ];
-        // :04000005556677883D
-        let start_addr_b = [
-            48, 52, 48, 48, 48, 48, 48, 53, 53, 53, 54, 54, 55, 55, 56, 56, 51, 68,
-        ];
+        let start_addr_a = StartAddress::Linear(0x1122_3344);
+        let start_addr_b = StartAddress::Linear(0x5566_7788);
 
         // Arrange
         let mut ih1 = IntelHex::new();
@@ -2190,9 +2172,7 @@ mod tests {
     #[test]
     fn test_merge_safe_identical_start_addr() {
         // Arrange
-        let start_addr = Some([
-            48, 52, 48, 48, 48, 48, 48, 53, 49, 49, 50, 50, 51, 51, 52, 52, 52, 68,
-        ]); // :04000005112233444D
+        let start_addr = Some(StartAddress::Linear(0x1122_3344));
 
         let mut ih1 = IntelHex::new();
         ih1.buffer.insert(0x20, vec![0x0, 0x0]);
@@ -2681,6 +2661,111 @@ mod tests {
                 2
             ))
         );
+    }
+
+    #[test]
+    fn test_parse_start_segment_address() {
+        // Arrange: CS = 0x1234, IP = 0x5678
+        let mut ih = IntelHex::new();
+        let raw = format!(":0400000312345678E5\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(
+            ih.start_addr,
+            Some(StartAddress::Segment {
+                cs: 0x1234,
+                ip: 0x5678
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_start_linear_address() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let raw = format!(":0400000512345678E3\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.start_addr, Some(StartAddress::Linear(0x1234_5678)));
+    }
+
+    #[test]
+    fn test_parse_start_address_lowercase() {
+        // Arrange
+        let mut ih = IntelHex::new();
+        let raw = format!(":04000005abcdef018f\n{REC_EOF}\n");
+
+        // Act
+        let res = ih.parse(raw.as_bytes());
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih.start_addr, Some(StartAddress::Linear(0xABCD_EF01)));
+    }
+
+    #[test]
+    fn test_merge_safe_start_address_differs_only_in_case() {
+        // Arrange: the same start address, written in upper and lower case
+        let mut ih1 = IntelHex::new();
+        let raw1 = format!(":04000005ABCDEF018F\n{REC_DATA_A}\n{REC_EOF}\n");
+        let _ = ih1.parse(raw1.as_bytes());
+
+        let mut ih2 = IntelHex::new();
+        let raw2 = format!(":04000005abcdef018f\n{REC_DATA_B}\n{REC_EOF}\n");
+        let _ = ih2.parse(raw2.as_bytes());
+
+        // Act
+        let res = ih1.merge_safe(&ih2);
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(ih1.start_addr, Some(StartAddress::Linear(0xABCD_EF01)));
+    }
+
+    #[test]
+    fn test_write_hex_start_address() {
+        // Arrange
+        let dir = fresh_test_dir("ut_write_hex_start_addr");
+        let cases = [
+            (
+                StartAddress::Segment {
+                    cs: 0x1234,
+                    ip: 0x5678,
+                },
+                ":0400000312345678E5",
+            ),
+            (StartAddress::Linear(0x1234_5678), ":0400000512345678E3"),
+        ];
+
+        for (index, (start_addr, expected_record)) in cases.into_iter().enumerate() {
+            let path = dir.join(format!("ih{index}.hex"));
+            let mut ih = IntelHex::new();
+            ih.buffer.insert(0x0, vec![0x1]);
+            ih.size = 1;
+            ih.start_addr = Some(start_addr);
+
+            // Act
+            let res = ih.write_hex(&path);
+
+            // Assert: the record is written first and is read back as the same value
+            assert!(res.is_ok(), "{start_addr}");
+            let written = std::fs::read_to_string(&path).unwrap_or_default();
+            assert_eq!(
+                written.lines().next(),
+                Some(expected_record),
+                "{start_addr}"
+            );
+            let reloaded = IntelHex::from_hex(&path).map(|ih| ih.start_addr);
+            assert_eq!(reloaded, Ok(Some(start_addr)), "{start_addr}");
+        }
     }
 
     #[test]
