@@ -15,6 +15,51 @@ pub fn sanitize_hex_input(value: &mut String) {
         .collect();
 }
 
+/// Keep the hex digits (uppercased) and group separators of an input field's text,
+/// in the format `parse_hex_pattern` reads, e.g. `0x0a, 0x1b` -> `0A 1B`
+pub fn sanitize_hex_pattern_input(value: &mut String) {
+    *value = filter_digits(&strip_radix_prefixes(value, 'x'), 16);
+}
+
+/// Remove C-style radix prefixes (`0x`, `0b`; `marker` is the letter) that start a
+/// group, e.g. `"0x12, 0X34"` -> `"12, 34"`
+pub fn strip_radix_prefixes(s: &str, marker: char) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let at_group_start = i == 0 || !chars[i - 1].is_ascii_alphanumeric();
+        let is_prefix = chars[i] == '0'
+            && chars
+                .get(i + 1)
+                .is_some_and(|c| c.eq_ignore_ascii_case(&marker));
+        if at_group_start && is_prefix {
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Keep digits of the given radix (uppercased) and turn group separators (whitespace,
+/// `,` `;` `:` `-` `_`) into single spaces between digits. Anything else is dropped.
+pub fn filter_digits(s: &str, radix: u32) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_digit(radix) {
+            out.push(c.to_ascii_uppercase());
+        } else if (c.is_whitespace() || matches!(c, ',' | ';' | ':' | '-' | '_'))
+            && !out.is_empty()
+            && !out.ends_with(' ')
+        {
+            out.push(' ');
+        }
+    }
+    out
+}
+
 /// Parse a hex address, e.g. `1F00`, `0x1F00`, ` 0X1f00 `
 pub fn parse_hex_addr(input: &str) -> Option<usize> {
     let s = strip_hex_prefix(input.trim());
@@ -84,7 +129,10 @@ mod tests {
         let values = inputs.map(sanitized);
 
         // Assert
-        assert_eq!(values, ["1F00", "abcdef", "0123456789ABCDEF"]);
+        assert_eq!(
+            values,
+            ["1F00", "abcdef", "0123456789ABCDEF"].map(String::from)
+        );
     }
 
     #[test]
@@ -96,7 +144,7 @@ mod tests {
         let values = inputs.map(sanitized);
 
         // Assert: the `0` of the prefix is not kept as a digit
-        assert_eq!(values, ["1F00", "1f00", "1F00", "", "FF"]);
+        assert_eq!(values, ["1F00", "1f00", "1F00", "", "FF"].map(String::from));
     }
 
     #[test]
@@ -108,7 +156,10 @@ mod tests {
         let values = inputs.map(sanitized);
 
         // Assert
-        assert_eq!(values, ["08000000", "1F00", "1F00", "12", "", "1F"]);
+        assert_eq!(
+            values,
+            ["08000000", "1F00", "1F00", "12", "", "1F"].map(String::from)
+        );
     }
 
     #[test]
@@ -120,7 +171,98 @@ mod tests {
         let values = inputs.map(sanitized);
 
         // Assert: a `0x` after the first digit is not a prefix
-        assert_eq!(values, ["102", "00"]);
+        assert_eq!(values, ["102", "00"].map(String::from));
+    }
+
+    // ===================== sanitize_hex_pattern_input =====================
+
+    /// `sanitize_hex_pattern_input` applied to a copy of `input`
+    fn sanitized_pattern(input: &str) -> String {
+        let mut value = input.to_string();
+        sanitize_hex_pattern_input(&mut value);
+        value
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_keeps_groups() {
+        // Arrange
+        let inputs = ["0a 1b", "0A,1B", "de:ad:be:ef", "0A  ,  1B"];
+
+        // Act
+        let values = inputs.map(sanitized_pattern);
+
+        // Assert: separators become single spaces, digits are uppercased
+        assert_eq!(
+            values,
+            ["0A 1B", "0A 1B", "DE AD BE EF", "0A 1B"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_drops_prefixes() {
+        // Arrange
+        let inputs = ["0x0A, 0x1B", "0X0a", "0x", "0x1,0x23"];
+
+        // Act
+        let values = inputs.map(sanitized_pattern);
+
+        // Assert
+        assert_eq!(values, ["0A 1B", "0A", "", "1 23"].map(String::from));
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_prefix_only_at_group_start() {
+        // Arrange
+        let inputs = ["10x2", "A0x5", "1F 0x2"];
+
+        // Act
+        let values = inputs.map(sanitized_pattern);
+
+        // Assert: a `0x` after a digit is not a prefix
+        assert_eq!(values, ["102", "A05", "1F 2"].map(String::from));
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_drops_other_chars() {
+        // Arrange
+        let inputs = ["0G1H", "zz", "x1F", "1+2", "#FF", "1=2*3"];
+
+        // Act
+        let values = inputs.map(sanitized_pattern);
+
+        // Assert: only separators become spaces, other symbols are not
+        assert_eq!(
+            values,
+            ["01", "", "1F", "12", "FF", "123"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_no_leading_separator() {
+        // Arrange
+        let inputs = [" 0A", ", 0A", "+0A"];
+
+        // Act
+        let values = inputs.map(sanitized_pattern);
+
+        // Assert
+        assert_eq!(values, ["0A"; 3].map(String::from));
+    }
+
+    #[test]
+    fn test_sanitize_hex_pattern_input_output_parses() {
+        // Arrange
+        let inputs = ["0x0a, 0x1b", "0A:1B", "0a-1b", "0a1b"];
+
+        // Act
+        let patterns = inputs.map(|s| parse_hex_pattern(&sanitized_pattern(s)));
+
+        // Assert
+        assert!(
+            patterns
+                .iter()
+                .all(|p| p.as_deref() == Some(&[0x0A, 0x1B][..]))
+        );
     }
 
     // =========================== parse_hex_addr ===========================

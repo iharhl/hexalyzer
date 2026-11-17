@@ -286,7 +286,7 @@ impl HexViewerApp {
     fn tools_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Tools", |ui| {
             if ui.button("Hex Converter").clicked() {
-                self.converter.active = true;
+                self.converter.open(ui.ctx());
             }
         });
     }

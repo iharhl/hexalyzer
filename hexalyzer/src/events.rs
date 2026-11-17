@@ -55,7 +55,7 @@ fn collect_inner(i: &egui::InputState, text_edit_focused: bool) -> EventState {
 
         match event {
             // Skip text typed with Alt / Ctrl / Cmd held, or into a text field
-            // (e.g. a converter field reached with Tab presses)
+            // (e.g. the jump-to or search field)
             egui::Event::Text(text) if !shortcut_key_pressed && !text_edit_focused => {
                 state
                     .hex_chars
