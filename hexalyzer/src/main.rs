@@ -1,11 +1,3 @@
-#![warn(
-    clippy::all,
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic
-)]
 // Tell OS to hide the console window when running.
 // This attribute is only applied if the target OS is Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -39,6 +31,9 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(load_icon())
+            // On Linux, must match the `hexalyzer.desktop` file of the .deb / AppImage,
+            // so the desktop shows the app's icon and name for the window
+            .with_app_id("hexalyzer")
             .with_resizable(true)
             .with_inner_size([960.0, 720.0])
             .with_min_inner_size(app::MIN_WINDOW_SIZE),
@@ -135,13 +130,11 @@ impl eframe::App for HexViewerApp {
 
 fn load_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
-    const ICON_RGBA: &[u8] = include_bytes!("../assets/icon_mac.rgba");
+    const ICON_PNG: &[u8] = include_bytes!("../assets/icon_128x128_mac.png");
     #[cfg(not(target_os = "macos"))]
-    const ICON_RGBA: &[u8] = include_bytes!("../assets/icon_win.rgba");
+    const ICON_PNG: &[u8] = include_bytes!("../assets/icon_128x128_win.png");
 
-    egui::IconData {
-        rgba: ICON_RGBA.to_vec(),
-        width: 128,
-        height: 128,
-    }
+    // The PNG is embedded at compile time, so decoding fails only if the asset is broken.
+    // Fall back to the default icon.
+    eframe::icon_data::from_png_bytes(ICON_PNG).unwrap_or_default()
 }

@@ -18,11 +18,7 @@ sips -z 1024 1024 "$ASSETS_DIR/icon_1024x1024_mac.png" --out "$ASSETS_DIR/icon.i
 
 iconutil -c icns "$ASSETS_DIR/icon.iconset"
 
-# --- Prep icon for MacOS doc
-
-magick "$ASSETS_DIR/icon_128x128_mac.png" "$ASSETS_DIR/icon_mac.rgba"
-
-# --- Prep icon for Win / Linux taskbar
+# --- Prep icon for Windows executable and installer
+# (the window / dock icon is loaded at runtime from the 128x128 PNGs)
 
 magick "$ASSETS_DIR/icon_1024x1024_win.png" -define icon:auto-resize=256,128,64,48,32,16 "$ASSETS_DIR/icon.ico"
-magick "$ASSETS_DIR/icon_128x128_win.png" "$ASSETS_DIR/icon_win.rgba"
