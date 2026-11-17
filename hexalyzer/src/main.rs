@@ -114,12 +114,8 @@ impl eframe::App for HexViewerApp {
             if let Some(curr_session) = self.sessions.get_mut(index) {
                 // Also ignore a drag of another widget (e.g. the side panel edge) moving
                 // over the bytes, as selection follows the raw pointer state
-                curr_session.selection.blocked =
-                    self.popup.active || self.converter.has_focus() || ctx.dragged_id().is_some();
-                curr_session.editor.blocked = self.popup.active || self.converter.has_focus();
-                if self.converter.has_focus() {
-                    curr_session.selection.clear();
-                }
+                curr_session.selection.blocked = self.popup.active || ctx.dragged_id().is_some();
+                curr_session.editor.blocked = self.popup.active;
                 curr_session.show_central_panel(ui, self.bytes_per_row, &self.events);
             }
         } else {

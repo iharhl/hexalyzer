@@ -1,7 +1,25 @@
 use crate::hex_input::{
     filter_digits, parse_hex_pattern, sanitize_hex_pattern_input, strip_radix_prefixes,
 };
-use eframe::egui;
+use eframe::egui::{
+    self, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, WindowLevel,
+};
+
+/// Default window width
+const WINDOW_WIDTH: f32 = 440.0;
+/// Window height until the actual window's content was measured once
+const FALLBACK_HEIGHT: f32 = 159.0;
+/// Narrowest window width it can be resized to
+const MIN_WIDTH: f32 = 320.0;
+/// Widest window width it can be resized to
+const MAX_WIDTH: f32 = 4096.0;
+/// Space around the window content
+const MARGIN: egui::Margin = egui::Margin {
+    left: 12,
+    right: 12,
+    top: 12,
+    bottom: 2,
+};
 
 /// Converter input field
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,83 +106,135 @@ impl Status {
     }
 }
 
-// TODO: make it a standalone window that can go outside bounds
-//       and indicates that it is in focus
-
-/// Standalone hex/dec/bin/ascii converter tool window
+/// Hex/dec/bin/ascii converter tool, shown in its own OS window
 #[derive(Default)]
 pub struct HexConverter {
-    pub active: bool,
+    active: bool,
     hex: String,
     dec: String,
     bin: String,
     ascii: String,
     endian: Endian,
     signed: bool,
+    /// Keep the window above all other windows
+    pinned: bool,
     /// Field last edited by the user, re-converted when the options change
     source: Option<Field>,
     status: Option<Status>,
-    /// Whether the last click landed in the converter window. Stays set until the user
-    /// clicks elsewhere, so keys typed into the converter never reach the main view.
-    focused: bool,
+    /// Where the window opens, next to the main window. Set when opened.
+    position: Option<egui::Pos2>,
+    /// Height of the content measured when drawn. The window is kept this tall,
+    /// so there is no empty space below the rows.
+    height: Option<f32>,
+    /// Last known window width, to keep it when the size is resent after a zoom change
+    width: Option<f32>,
+    /// Zoom factor (Cmd +/-) the window size was last set with
+    zoom: Option<f32>,
 }
 
 impl HexConverter {
-    /// Returns true if the last click landed in the converter window
-    pub const fn has_focus(&self) -> bool {
-        self.focused
+    fn viewport_id() -> ViewportId {
+        ViewportId::from_hash_of("hex_converter")
     }
 
-    /// Render the converter window (if active)
+    /// Open the converter window, or bring it to the front if it is already open
+    pub fn open(&mut self, ctx: &egui::Context) {
+        if self.active {
+            ctx.send_viewport_cmd_to(Self::viewport_id(), ViewportCommand::Focus);
+        }
+        self.active = true;
+    }
+
+    /// Render the converter window (if open). Call from the main window's `ui`.
     pub fn show(&mut self, ctx: &egui::Context) {
         if !self.active {
-            self.focused = false;
             return;
         }
-
-        let mut is_open = self.active;
-        let response = egui::Window::new("Hex Converter")
-            .open(&mut is_open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([420.0, 230.0])
-            .show(ctx, |ui| {
-                egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        self.show_contents(ui);
-                    });
-            });
-        self.active = is_open;
-
-        // Focus follows the last click: inside the window -> converter, elsewhere -> main app
-        if let Some(press_pos) = ctx.input(|i| {
-            i.pointer
-                .any_pressed()
-                .then(|| i.pointer.press_origin())
-                .flatten()
-        }) {
-            self.focused =
-                response.is_some_and(|r| ctx.layer_id_at(press_pos) == Some(r.response.layer_id));
+        if self.position.is_none() {
+            self.position = open_position(ctx);
         }
+
+        let level = if self.pinned {
+            WindowLevel::AlwaysOnTop
+        } else {
+            WindowLevel::Normal
+        };
+        // Only the width can be resized (the content does not grow in height)
+        let height = self.height.unwrap_or(FALLBACK_HEIGHT);
+        let mut builder = ViewportBuilder::default()
+            .with_title("Hex Converter")
+            .with_inner_size([WINDOW_WIDTH, height])
+            .with_min_inner_size([MIN_WIDTH, height])
+            .with_max_inner_size([MAX_WIDTH, height])
+            .with_window_level(level);
+        if let Some(position) = self.position {
+            builder = builder.with_position(position);
+        }
+
+        // Immediate: the converter is light, and it can borrow `self` directly
+        ctx.show_viewport_immediate(Self::viewport_id(), builder, |ui, class| {
+            if ui.input(|i| i.viewport().close_requested()) {
+                self.active = false;
+            }
+            if class == ViewportClass::EmbeddedWindow {
+                // Platforms without multiple windows: already inside an egui window
+                self.show_contents(ui, false);
+            } else {
+                let frame = egui::Frame::central_panel(ui.style()).inner_margin(MARGIN);
+                egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                    // A scope: its rect is the content, while the panel fills the window
+                    let content = ui.scope(|ui| self.show_contents(ui, true)).response.rect;
+                    self.height = Some(content.height() + MARGIN.sum().y);
+                });
+                self.follow_zoom(ui.ctx());
+            }
+        });
+
+        // Reopening places the window next to the main window again
         if !self.active {
-            self.focused = false;
+            self.position = None;
         }
     }
 
-    fn show_contents(&mut self, ui: &mut egui::Ui) {
-        if self.show_options_row(ui)
+    /// Keep the window fitting its content when the zoom (Cmd +/-) changes.
+    ///
+    /// After a zoom change the window would keep its old pixel size while the content grows
+    /// or shrinks. Resend the size, so the window scales with the zoom like its content.
+    fn follow_zoom(&mut self, ctx: &egui::Context) {
+        let zoom = ctx.zoom_factor();
+        let zoom_changed = self
+            .zoom
+            .is_some_and(|old| (old - zoom).abs() > f32::EPSILON);
+        if zoom_changed {
+            let height = self.height.unwrap_or(FALLBACK_HEIGHT);
+            let width = self.width.unwrap_or(WINDOW_WIDTH);
+            // Unlock the height first, so neither limit blocks the other while changing
+            ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(egui::vec2(
+                MAX_WIDTH, MAX_WIDTH,
+            )));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::vec2(MIN_WIDTH, height)));
+            ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(egui::vec2(MAX_WIDTH, height)));
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width, height)));
+        } else if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
+            self.width = Some(rect.width());
+        }
+        self.zoom = Some(zoom);
+    }
+
+    /// `native`: whether the converter has its own OS window (it can then be pinned)
+    fn show_contents(&mut self, ui: &mut egui::Ui, native: bool) {
+        if self.show_options_row(ui, native)
             && let Some(source) = self.source
         {
             self.convert_from(source);
         }
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         self.show_input_rows(ui);
         self.show_status_row(ui);
     }
 
-    /// Returns true if an option changed
-    fn show_options_row(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Returns true if a conversion option changed
+    fn show_options_row(&mut self, ui: &mut egui::Ui, native: bool) -> bool {
         ui.horizontal(|ui| {
             let mut changed = false;
             ui.label("Endian:").on_hover_text(
@@ -186,6 +256,12 @@ impl HexConverter {
                      Type - or + in front of Dec to switch it on or off.",
                 )
                 .changed();
+            if native {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.toggle_value(&mut self.pinned, "\u{1f4cc}")
+                        .on_hover_text("Keep on top of other windows");
+                });
+            }
             changed
         })
         .inner
@@ -295,7 +371,9 @@ impl HexConverter {
                 // The filter leaves only digits and spaces: odd-length groups are the
                 // only invalid input, and they are common while typing -> a warning
                 Field::Hex => parse_hex_pattern(&text).ok_or_else(|| {
-                    Status::Warning("odd-length group is ambiguous (ABC: 0A BC or AB 0C?)".into())
+                    Status::Warning(
+                        "odd-length group is ambiguous ( FFF: 0F FF or FF 0F ? )".into(),
+                    )
                 }),
                 Field::Ascii => parse_ascii(&text).map_err(Status::Error),
                 // Numbers are parsed MSB first, then put in memory order
@@ -353,6 +431,16 @@ impl HexConverter {
             }
         }
     }
+}
+
+/// Converter window open position: over the top-right corner of the main window, below its
+/// menu bar and tabs. Returns `None` if the main window's position is unknown.
+fn open_position(ctx: &egui::Context) -> Option<egui::Pos2> {
+    let outer = ctx.input(|i| i.viewport().outer_rect)?;
+    Some(egui::pos2(
+        outer.right() - WINDOW_WIDTH - 24.0,
+        outer.top() + 80.0,
+    ))
 }
 
 // ---------------------------------------------------------------------------
