@@ -31,9 +31,8 @@ Prebuilt installers and the `hexcli` tool are attached to each
 Binaries for Intel Macs are not prebuilt so you have to build them from source (see below).
 
 The installers are not code-signed, so the system gives a warning on first launch:
-- **macOS**: if macOS says the app "cannot be opened", go to System Settings → Privacy & Security
-  and click "Open Anyway". If it says the app "is damaged", run
-  `xattr -dr com.apple.quarantine /Applications/Hexalyzer.app` once.
+- **macOS**: if macOS says it could not verify that Hexalyzer is free of malware, click "Done",
+  then go to System Settings → Privacy & Security and click "Open Anyway".
 - **Windows**: if SmartScreen shows "Windows protected your PC", click "More info" → "Run anyway".
 
 Each release also has a `SHA256SUMS.txt` file. To check a download, run
