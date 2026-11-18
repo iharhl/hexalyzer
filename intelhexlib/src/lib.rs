@@ -25,3 +25,9 @@ mod search;
 pub use error::{IntelHexError, IntelHexErrorKind};
 pub use intelhex::{IntelHex, IterRange};
 pub use record::{RecordType, StartAddress};
+
+// Compile and run the Rust code blocks of the root README as doctests, so the usage
+// example stays in sync with the API. Only compiled when doctests run.
+#[cfg(doctest)]
+#[doc = include_str!("../../README.md")]
+struct ReadmeDoctests;

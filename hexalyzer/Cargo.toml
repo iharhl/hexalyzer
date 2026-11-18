@@ -44,6 +44,10 @@ icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon_128x128_win.png"]
 [package.metadata.packager.macos]
 # Extra Info.plist keys, see the comment in the file
 info-plist-path = "assets/Info.plist"
+# Ad-hoc signature does not require Apple Developer ID. Without it, only the binary is
+# signed (by the linker) and not the bundle, so macOS calls the downloaded app "damaged".
+# With it, macOS shows the regular unverified-developer warning which can be "Open Anyway".
+signing-identity = "-"
 
 [package.metadata.packager.nsis]
 # Installs into %LOCALAPPDATA%\Hexalyzer, no admin rights are needed

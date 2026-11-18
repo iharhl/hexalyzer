@@ -210,31 +210,38 @@ impl PopupState {
             ui.add_space(5.0);
 
             ui.heading("Hexalyzer");
-            ui.label("Cross-platform hex viewing and editing app");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.add_space(3.0);
+            ui.label("Viewer and editor for Intel HEX and binary files.");
 
             ui.add_space(3.0);
             ui.separator();
             ui.add_space(3.0);
 
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.label("Built in Rust with ");
+                ui.hyperlink_to("egui", "https://www.egui.rs");
+                ui.label(", an immediate-mode GUI library.");
+            });
             ui.label(
-                "The app is built with egui - immediate-mode GUI library. \
-                 HEX/BIN parsing and writing is handled by IntelHex standalone library, \
-                 built as part of the same project.",
+                "Reading and writing HEX and binary files is handled by intelhexlib, \
+                 a standalone library developed as part of this project.",
             );
 
-            ui.label("\nCheck out the source code on GitHub:");
-            ui.hyperlink_to(
-                "https://github.com/iharhl/hexalyzer",
-                "https://github.com/iharhl/hexalyzer",
-            );
+            ui.add_space(8.0);
+            let repo = env!("CARGO_PKG_REPOSITORY");
+            ui.horizontal(|ui| {
+                ui.label("Source code:");
+                ui.hyperlink_to(repo.trim_start_matches("https://"), repo);
+            });
 
             ui.add_space(3.0);
             ui.separator();
             ui.add_space(3.0);
 
             ui.label(format!(
-                "v{} | Copyright (c) 2026 Ihar Hlukhau | {} License",
-                env!("CARGO_PKG_VERSION"),
+                "Copyright © 2026 Ihar Hlukhau · {} License",
                 env!("CARGO_PKG_LICENSE")
             ));
             ui.add_space(5.0);

@@ -5,7 +5,7 @@ use crate::ui_popup::PopupState;
 use eframe::egui;
 
 impl HexViewerApp {
-    /// Displays the top menu bar with File, Edit, View, and About buttons
+    /// Displays the top menu bar with File, Edit, View, Tools, and About buttons
     pub(crate) fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menubar").show(ui, |ui| {
             ui.add_space(3.0);
