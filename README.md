@@ -30,14 +30,30 @@ Prebuilt installers and the `hexcli` tool are attached to each
 
 Binaries for Intel Macs are not prebuilt so you have to build them from source (see below).
 
-The installers are not code-signed, so the system gives a warning on first launch:
+### Security warnings
+
+Your browser or operating system may warn that Hexalyzer is unrecognized or could not be
+verified. **This is expected**: the warnings are about the files not being code-signed and
+not about anything found in them. Signing needs a paid Apple Developer ID on macOS and a
+code-signing certificate on Windows, which the project does not have yet.
+
+Hexalyzer is open source, and every release file is built by GitHub Actions straight from the
+tagged source in this repository (see the [release workflow](.github/workflows/release.yaml)).
+The build logs of each release are public on the
+[Actions page](https://github.com/iharhl/hexalyzer/actions/workflows/release.yaml).
+
+To get past the warnings:
+- **Browser**: Chrome may block a new release file as "not commonly downloaded". Open the
+  downloads list (`chrome://downloads`) and click "Download dangerous file".
 - **macOS**: if macOS says it could not verify that Hexalyzer is free of malware, click "Done",
-  then go to System Settings → Privacy & Security and click "Open Anyway".
+  then go to System Settings → Privacy & Security and click "Open Anyway". This might happen
+  twice: once when opening the `.dmg`, and once when first launching the installed app.
 - **Windows**: if SmartScreen shows "Windows protected your PC", click "More info" → "Run anyway".
 
-Each release also has a `SHA256SUMS.txt` file. To check a download, run
-`shasum -a 256 -c SHA256SUMS.txt --ignore-missing` in the folder with both files
-(on Windows: `Get-FileHash <file>` and compare by eye).
+I may add signing in a future release: an Apple Developer ID with notarization on macOS, and
+a signing service such as [Azure Trusted Signing](https://azure.microsoft.com/products/trusted-signing)
+or [SignPath](https://signpath.org) (free for open-source projects) on Windows.
+That would remove most of these warnings.
 
 ### Notes for Linux
 
