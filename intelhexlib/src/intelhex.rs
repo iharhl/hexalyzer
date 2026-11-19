@@ -978,8 +978,8 @@ impl IntelHex {
     /// Returns a borrowing iterator over individual bytes in the given address range.
     ///
     /// Yields `Some(byte)` for addresses that contain data, `None` for gaps.
-    /// This is the iterator equivalent of [`read_range_safe`] which avoids heap
-    /// allocation.
+    /// This is the iterator equivalent of [`read_range_safe`](Self::read_range_safe)
+    /// which avoids heap allocation.
     ///
     /// The range is clamped to the end of the address space (`usize::MAX`), so in case of
     /// an overflow fewer than `len` elements will be yielded.

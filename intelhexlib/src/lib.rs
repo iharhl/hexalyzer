@@ -7,6 +7,16 @@
 //! - Error handling with [`IntelHexError`].
 //! - Easy access to hex data for its reading and modification.
 //!
+//! <div class="warning">
+//!
+//! `intelhexlib` is still maturing and is not yet production ready. It is tested with
+//! unit, integration and doc tests, but it has not been fully verified against every
+//! Intel HEX variant and toolchain, and its API may change between `0.x` releases.
+//! Bug reports and feedback are very welcome on the
+//! [issue tracker](https://github.com/iharhl/hexalyzer/issues).
+//!
+//! </div>
+//!
 //! ## Example
 //!
 //! ```
@@ -26,8 +36,8 @@ pub use error::{IntelHexError, IntelHexErrorKind};
 pub use intelhex::{IntelHex, IterRange};
 pub use record::{RecordType, StartAddress};
 
-// Compile and run the Rust code blocks of the root README as doctests, so the usage
+// Compile and run the Rust code blocks of the crate README as doctests, so the usage
 // example stays in sync with the API. Only compiled when doctests run.
 #[cfg(doctest)]
-#[doc = include_str!("../../README.md")]
+#[doc = include_str!("../README.md")]
 struct ReadmeDoctests;

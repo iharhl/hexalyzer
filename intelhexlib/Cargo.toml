@@ -5,8 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Intel HEX parser, editor and writer with sparse memory support"
 repository.workspace = true
+documentation = "https://docs.rs/intelhexlib"
+readme = "README.md"
+keywords = ["intel-hex", "ihex", "hex", "firmware", "embedded"]
+categories = ["embedded", "parser-implementations", "encoding", "command-line-utilities"]
+exclude = ["benches/", "build/"]
 
 [lints]
 workspace = true

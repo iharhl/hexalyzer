@@ -25,7 +25,7 @@ Prebuilt installers and the `hexcli` tool are attached to each
 | Platform              | App                                     | CLI                                  |
 |-----------------------|-----------------------------------------|--------------------------------------|
 | macOS (Apple Silicon) | `Hexalyzer_<version>_aarch64.dmg`       | `hexcli_<version>_macos-arm64.tar.gz`  |
-| Windows (x64)         | `Hexalyzer_<version>_x64-setup.exe`     | `hexcli_<version>_windows-x86_64.zip`  |
+| Windows (x64)         | `hexalyzer_<version>_x64-setup.exe`     | `hexcli_<version>_windows-x86_64.zip`  |
 | Linux (x64)           | `hexalyzer_<version>_amd64.deb` or `hexalyzer_<version>_x86_64.AppImage` | `hexcli_<version>_linux-x86_64.tar.gz` |
 
 Binaries for Intel Macs are not prebuilt so you have to build them from source (see below).
@@ -165,98 +165,23 @@ Displays version information and credits for the Hexalyzer project.
 
 ## Intel HEX Library
 
-The core of Hexalyzer is powered by a standalone Intel HEX parsing library `intelhexlib`. It is designed to
-handle memory-sparse firmware files using a BTreeMap buffer.
+The core of Hexalyzer is powered by a standalone Intel HEX library `intelhexlib`. It is designed to
+handle memory-sparse firmware files: data is stored as contiguous chunks in a
+`BTreeMap<usize, Vec<u8>>`, so large gaps between memory segments don't use extra RAM.
+It can read, edit (bytes, ranges, relocation, merging), search and write HEX and binary data.
 
-### Key Features
-
-- **Sparse Data Support**: Uses `BTreeMap<usize, Vec<u8>>` to store data, meaning files with large gaps
-between memory segments don't consume unnecessary RAM. Performance remains optimized by storing
-contiguous chunks. The key represents the starting address, and the `Vec<u8>` contains the
-payload which ensures fast lookups.
-
-- **Data editing**: Allows updating single bytes, byte ranges, supports relocation to a new
-start address, merging, etc.
-
-- **Flexible API**: Allows for easy parsing and update of hex data as well as straightforward
-integration into other projects.
-
-### Adding to a project
-
-The library is not published on crates.io. Add it as a git dependency, pinned to a release tag:
-
-```toml
-[dependencies]
-intelhexlib = { git = "https://github.com/iharhl/hexalyzer", tag = "v0.4.0" }
-```
-
-### Usage Example
-
-```rust
-use intelhexlib::IntelHex;
-use std::path::PathBuf;
-
-fn main() {
-    // Load and parse a file
-    let path = PathBuf::from("firmware.hex");
-    if let Ok(mut ih) = IntelHex::from_hex(&path) {
-        println!("Loaded {} bytes from {:?}", ih.size, ih.filepath);
-
-        // Access data at a specific address
-        let address: usize = 0x0800_0000;
-        if let Some(byte) = ih.read_byte(address) {
-            println!("Byte at {:X}: {:02X}", address, byte);
-        }
-
-        // Update data at a specific address
-        let new_value = 0x0F;
-        match ih.update_byte(address, new_value) {
-            Ok(()) => println!("Updated byte at {:X} to: {:02X}", address, new_value),
-            Err(err) => println!("Error during update: {err}"),
-        }
-
-        // Iterate over all bytes, ignoring address gaps.
-        // Since it uses a BTreeMap, keys are always sorted by address.
-        // To iterate over contiguous chunks, use ih.iter() instead.
-        for (addr, byte) in ih.bytes().take(10) {
-            println!("{:X}: {:02X}", addr, byte);
-        }
-    }
-}
-```
+See the [library README](intelhexlib/README.md) for installation, a usage example and the
+full `hexcli` reference.
 
 ### CLI
 
-A CLI tool `hexcli` is also available for parsing and editing Intel HEX files.
+The `hexcli` tool is built on the library. It can:
+- Show info about a file.
+- Relocate a file to a new start address.
+- Convert a file between BIN and HEX formats.
+- Merge multiple files into one (mixing BIN and HEX files is allowed).
 
-Its functionality includes:
-- Getting info about a file.
-- Relocating the file to a new start address.
-- Converting a file between BIN and HEX formats.
-- Merging multiple files into a single one (mixing BIN and HEX files is allowed).
-
-```text
- ----------------------------------------------------------------
-|  Intel HEX Utility  | v0.4.0 - Copyright (c) 2026 Ihar Hlukhau |
- ----------------------------------------------------------------
-
-Usage:
-  hexcli info <input>
-  hexcli relocate <input> <output> [options]
-  hexcli convert <input> <output> [options]
-  hexcli merge <output> <input1>[:addr] ... <inputN>[:addr] [options]
-
-Options:
-  --address <val>    Base address for relocate / convert from BIN to HEX
-  --gap-fill <val>   Byte to fill gaps when converting / merging to BIN (default: 0xFF)
-  --overwrite        Merge: later inputs replace overlapping data (default: error)
-
-Examples:
-  hexcli info firmware.hex
-  hexcli relocate firmware.hex firmware_shifted.hex --address 0x1000
-  hexcli convert firmware.hex firmware.bin --gap-fill 0x00
-  hexcli merge final.hex firmware1.hex firmware2.bin:0xFF00
-```
+Prebuilt binaries are attached to each release (see [Installation](#installation)).
 
 
 ## Development
